@@ -22,7 +22,7 @@ jobs:
       jobs: ${{ steps.build.outputs.jobs }}
       version: ${{ steps.build.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: build
         run: |
@@ -57,7 +57,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.matrix.outputs.jobs) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -68,7 +68,7 @@ jobs:
             unzip zlib1g-dev file wget zstd
 
       - name: Cache OpenWrt feeds
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/feeds-cache-${{ matrix.release }}
           key: feeds-${{ matrix.release }}
@@ -89,7 +89,7 @@ jobs:
       - name: Build repository index
         run: ./repo.sh index-feed ${{ matrix.branch }} ${{ matrix.arch }} /tmp/keys
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: feed-${{ matrix.branch }}-${{ matrix.arch }}
           path: dist/${{ matrix.branch }}/${{ matrix.arch }}/*
@@ -101,9 +101,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [matrix, build]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: feeds
           pattern: feed-*
