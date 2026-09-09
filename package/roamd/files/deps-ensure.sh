@@ -28,13 +28,6 @@ have_network() {
 	return 1
 }
 
-pkg_manager() {
-	command -v apk >/dev/null 2>&1 && { echo apk; return 0; }
-	command -v opkg >/dev/null 2>&1 && { echo opkg; return 0; }
-
-	return 1
-}
-
 installed_names() {
 	local try out
 
@@ -52,33 +45,14 @@ installed_names() {
 }
 
 index_update() {
-	local try
-
 	[ -n "$index_done" ] && return 0
 
-	for try in $(seq $TRIES); do
-		case "$mgr" in
-			apk) apk update >/dev/null 2>&1 && { index_done=1; return 0; } ;;
-			opkg) opkg update >/dev/null 2>&1 && { index_done=1; return 0; } ;;
-		esac
-		sleep 5
-	done
-
-	return 1
+	sys_retry $TRIES 5 sys_index_update || return 1
+	index_done=1
 }
 
 pkg_install() {
-	local name="$1" try
-
-	for try in $(seq $TRIES); do
-		case "$mgr" in
-			apk) apk add "$name" >/dev/null 2>&1 && return 0 ;;
-			opkg) opkg install "$name" >/dev/null 2>&1 && return 0 ;;
-		esac
-		sleep 5
-	done
-
-	return 1
+	sys_retry $TRIES 5 sys_add "$1"
 }
 
 current_pkg() {
@@ -190,7 +164,7 @@ ensure_curl() {
 	return 0
 }
 
-mgr=$(pkg_manager) || finish fail "no package manager found"
+mgr=$(sys_mgr) || finish fail "no package manager found"
 
 installed=$(installed_names) || finish fail "$mgr gave no package list"
 

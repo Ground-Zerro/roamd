@@ -476,6 +476,20 @@ static int roamd_mesh_update(struct ubus_context *ctx, struct ubus_object *obj,
 	return 0;
 }
 
+static int roamd_mesh_self_update(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	if (mesh.role != MESH_CONTROLLER)
+		return UBUS_STATUS_PERMISSION_DENIED;
+
+	blob_buf_init(&b, 0);
+	mesh_ctrl_self_update(&b);
+	ubus_send_reply(ctx, req, b.head);
+
+	return 0;
+}
+
 static int roamd_mesh_apply(struct ubus_context *ctx, struct ubus_object *obj,
 			struct ubus_request_data *req, const char *method,
 			struct blob_attr *msg)
@@ -698,6 +712,7 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD("mesh_client_forget", roamd_mesh_client_forget, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_self_check", roamd_mesh_self_check),
 	UBUS_METHOD("mesh_update", roamd_mesh_update, mesh_arg_policy),
+	UBUS_METHOD_NOARG("mesh_self_update", roamd_mesh_self_update),
 	UBUS_METHOD("mesh_settings", roamd_mesh_settings, settings_policy),
 	UBUS_METHOD_NOARG("mesh_apply", roamd_mesh_apply),
 	UBUS_METHOD_NOARG("mesh_report", roamd_mesh_report),

@@ -780,8 +780,8 @@ msgstr "Проверить обновления"
 msgid "Checking the repository…"
 msgstr "Проверяем репозиторий…"
 
-msgid "No package repository is configured. Set it on the Settings tab."
-msgstr "Репозиторий пакетов не задан. Укажите его на вкладке «Настройки»."
+msgid "The roamd package repository is not connected on this device. Run install.sh again to add it."
+msgstr "Репозиторий roamd не подключён на этом устройстве. Запустите install.sh ещё раз, чтобы его добавить."
 
 msgid "The repository is unreachable."
 msgstr "Репозиторий недоступен."
@@ -789,8 +789,8 @@ msgstr "Репозиторий недоступен."
 msgid "The check failed."
 msgstr "Проверка не удалась."
 
-msgid "A newer version is available. Install it on this device the same way you installed the current one."
-msgstr "Доступна более свежая версия. Установите её на это устройство так же, как устанавливали текущую."
+msgid "A newer version is available. The controller can install it itself."
+msgstr "Доступна более свежая версия. Контроллер может установить её сам."
 
 msgid "This device runs the newest packages from the repository."
 msgstr "На устройстве установлены самые свежие пакеты из репозитория."
@@ -971,3 +971,27 @@ msgstr "Сейчас идёт удаление узла"
 
 msgid "no roamd package for OpenWrt %s (%s) — build it and put it in the repository"
 msgstr "нет пакета roamd для OpenWrt %s (%s) — соберите его и положите в репозиторий"
+
+msgid "Update the controller"
+msgstr "Обновить контроллер"
+
+msgid "Installing the packages…"
+msgstr "Устанавливаем пакеты…"
+
+msgid "Updating the controller"
+msgstr "Обновление контроллера"
+
+msgid "The controller is being updated now"
+msgstr "Сейчас идёт обновление контроллера"
+
+msgid "the controller is up to date"
+msgstr "контроллер обновлён"
+
+msgid "installing the packages"
+msgstr "установка пакетов"
+
+msgid "the package index is not available"
+msgstr "список пакетов недоступен"
+
+msgid "the packages could not be installed"
+msgstr "не удалось установить пакеты"

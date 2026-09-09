@@ -14,6 +14,7 @@
 #define MESH_NAME_MAX		64
 #define MESH_ADDR_MAX		64
 #define MESH_MAC_MAX		18
+#define MESH_URL_MAX		192
 
 enum mesh_role {
 	MESH_CONTROLLER,
@@ -63,7 +64,7 @@ struct mesh_config {
 	char ft_key[33];
 	bool wifi_shutdown;
 	bool auto_update;
-	char pkg_url[MESH_ADDR_MAX];
+	char pkg_url[MESH_URL_MAX];
 
 	char controller_id[MESH_ID_MAX];
 	char controller_name[MESH_NAME_MAX];
@@ -148,6 +149,7 @@ void mesh_ctrl_acquire(const char *addr, struct blob_buf *b);
 void mesh_ctrl_acquire_blob(struct blob_buf *b);
 bool mesh_ctrl_acquire_mac(uint8_t *out);
 void mesh_ctrl_update(const char *id, struct blob_buf *b);
+void mesh_ctrl_self_update(struct blob_buf *b);
 void mesh_ctrl_release(const char *id, struct blob_buf *b);
 void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b);
 void mesh_ctrl_poll_start(void);

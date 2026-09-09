@@ -192,12 +192,10 @@ main() {
 		msg "Устанавливаем roamd"
 	fi
 
+	ask_ru && PACKAGES="$PACKAGES $PACKAGES_RU"
+
 	# shellcheck disable=SC2086
 	pkg_install $PACKAGES || { err "Установка не удалась"; exit 1; }
-
-	if ask_ru; then
-		pkg_install "$PACKAGES_RU" || err "Русский язык поставить не удалось"
-	fi
 
 	/etc/init.d/roamd enable >/dev/null 2>&1
 	/etc/init.d/roamd restart >/dev/null 2>&1

@@ -122,6 +122,91 @@ node_pkgmgr() {
 PKG_MAIN="roamd"
 PKG_UI="luci-app-roamd luci-i18n-roamd-ru"
 
+SYS_MGR=""
+
+sys_mgr() {
+	if [ -z "$SYS_MGR" ]; then
+		command -v apk >/dev/null 2>&1 && SYS_MGR=apk
+		[ -n "$SYS_MGR" ] || { command -v opkg >/dev/null 2>&1 && SYS_MGR=opkg; }
+	fi
+
+	[ -n "$SYS_MGR" ] || return 1
+
+	echo "$SYS_MGR"
+}
+
+sys_retry() {
+	local tries="$1" delay="$2" try=1
+	shift 2
+
+	while :; do
+		"$@" && return 0
+		[ "$try" -lt "$tries" ] || return 1
+		try=$((try + 1))
+		sleep "$delay"
+	done
+}
+
+sys_index_update() {
+	case "$(sys_mgr)" in
+		apk) apk update >/dev/null 2>&1 ;;
+		opkg) opkg update >/dev/null 2>&1 ;;
+		*) return 1 ;;
+	esac
+}
+
+sys_add() {
+	case "$(sys_mgr)" in
+		apk) apk add "$@" >/dev/null 2>&1 ;;
+		opkg) opkg install "$@" >/dev/null 2>&1 ;;
+		*) return 1 ;;
+	esac
+}
+
+sys_upgrade() {
+	[ "$#" -gt 0 ] || return 1
+
+	case "$(sys_mgr)" in
+		apk) apk upgrade "$@" >/dev/null 2>&1 ;;
+		opkg) opkg upgrade "$@" >/dev/null 2>&1 ;;
+		*) return 1 ;;
+	esac
+}
+
+sys_newer() {
+	case "$(sys_mgr)" in
+		apk) [ "$(apk version -t "$1" "$2" 2>/dev/null)" = ">" ] ;;
+		opkg) opkg compare-versions "$1" ">>" "$2" ;;
+		*) return 1 ;;
+	esac
+}
+
+sys_installed() {
+	local version
+
+	case "$(sys_mgr)" in
+		apk) version=$(sed -n "/^P:$1\$/,/^\$/s/^V://p" /lib/apk/db/installed 2>/dev/null | head -1) ;;
+		opkg) version=$(opkg list-installed 2>/dev/null | awk -v n="$1" '$1 == n { print $3 }' | head -1) ;;
+	esac
+
+	[ -n "$version" ] || return 1
+
+	echo "$version"
+}
+
+sys_available() {
+	local version
+
+	case "$(sys_mgr)" in
+		apk) version=$(apk list -u "$1" 2>/dev/null | awk 'NR == 1 { print $1 }' | sed "s/^$1-//") ;;
+		opkg) version=$(opkg list-upgradable 2>/dev/null | awk -v n="$1" '$1 == n { print $NF }' | head -1) ;;
+	esac
+
+	[ -n "$version" ] || return 1
+
+	echo "$version"
+}
+
 pkg_local() {
 	local name="${3:-$PKG_MAIN}"
 	ls "$PKG_DIR/$1/$2/$name"-[0-9]*.apk "$PKG_DIR/$1/$2/${name}_"*.ipk 2>/dev/null | head -1

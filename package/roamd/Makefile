@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.0.0-r51
+PKG_VERSION:=1.0.0-r53
 PKG_RELEASE:=
 
 PKG_LICENSE:=GPL-3.0-only
@@ -60,6 +60,7 @@ define Package/roamd/install
 	$(INSTALL_BIN) ./files/mesh-profile.sh $(1)/usr/libexec/roamd/mesh-profile.sh
 	$(INSTALL_BIN) ./files/mesh-poll-all.sh $(1)/usr/libexec/roamd/mesh-poll-all.sh
 	$(INSTALL_BIN) ./files/mesh-selfcheck.sh $(1)/usr/libexec/roamd/mesh-selfcheck.sh
+	$(INSTALL_BIN) ./files/mesh-selfupdate.sh $(1)/usr/libexec/roamd/mesh-selfupdate.sh
 	$(INSTALL_BIN) ./files/deps-ensure.sh $(1)/usr/libexec/roamd/deps-ensure.sh
 	$(INSTALL_BIN) ./files/net-apply.sh $(1)/usr/libexec/roamd/net-apply.sh
 	$(INSTALL_BIN) ./files/mesh-release.sh $(1)/usr/libexec/roamd/mesh-release.sh

@@ -5,6 +5,8 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #include <libubox/uloop.h>
 #include <libubox/blobmsg_json.h>
@@ -17,12 +19,14 @@
 #define MESH_DISCOVER	"/usr/libexec/roamd/mesh-discover.sh"
 #define MESH_ACQUIRE	"/usr/libexec/roamd/mesh-acquire.sh"
 #define MESH_UPDATE	"/usr/libexec/roamd/mesh-update.sh"
+#define MESH_SELFUPDATE	"/usr/libexec/roamd/mesh-selfupdate.sh"
 #define MESH_POLL	"/usr/libexec/roamd/mesh-poll-all.sh"
 #define MESH_RELEASE	"/usr/libexec/roamd/mesh-release.sh"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
 #define ACQUIRE_DIR	"/var/run/roamd/acquire"
 #define MEMBERS_DIR	"/var/run/roamd/members"
 #define MESH_POLL_INTERVAL	15000
+#define TASK_STALE	180
 
 static struct uloop_process discover_proc;
 static struct uloop_process acquire_proc;
@@ -131,123 +135,98 @@ static void acquire_done(struct uloop_process *p, int ret)
 	roam_config_load();
 }
 
-void mesh_ctrl_acquire(const char *addr, struct blob_buf *b)
+static struct mesh_member *member_by_id(const char *id)
+{
+	struct mesh_member *m;
+
+	list_for_each_entry(m, &mesh_members, list)
+		if (!strcmp(m->id, id))
+			return m;
+
+	return NULL;
+}
+
+static void acquire_start(const char *kind, const char *script, const char *arg,
+			  const char *addr, struct blob_buf *b)
 {
 	pid_t pid;
 
+	if (acquire_busy()) {
+		blobmsg_add_string(b, "error", "busy");
+		blobmsg_add_string(b, "task_id", acquire_task);
+		if (acquire_addr[0])
+			blobmsg_add_string(b, "addr", acquire_addr);
+		return;
+	}
+
+	snprintf(acquire_task, sizeof(acquire_task), "%llu", (unsigned long long)roam_now);
+	snprintf(acquire_addr, sizeof(acquire_addr), "%s", addr ? addr : "");
+	acquire_kind = kind;
+
+	pid = mesh_spawn(script, arg ? arg : "", acquire_task);
+	if (pid <= 0) {
+		blobmsg_add_string(b, "error", "spawn_failed");
+		return;
+	}
+
+	acquire_proc.pid = pid;
+	acquire_proc.cb = acquire_done;
+	uloop_process_add(&acquire_proc);
+
+	blobmsg_add_string(b, "task_id", acquire_task);
+}
+
+void mesh_ctrl_acquire(const char *addr, struct blob_buf *b)
+{
 	if (!addr || !addr[0]) {
 		blobmsg_add_string(b, "error", "no_address");
 		return;
 	}
 
-	if (acquire_busy()) {
-		blobmsg_add_string(b, "error", "busy");
-		blobmsg_add_string(b, "task_id", acquire_task);
-		blobmsg_add_string(b, "addr", acquire_addr);
-		return;
-	}
-
-	snprintf(acquire_task, sizeof(acquire_task), "%llu", (unsigned long long)roam_now);
-	snprintf(acquire_addr, sizeof(acquire_addr), "%s", addr);
-	acquire_kind = "acquire";
-
-	pid = mesh_spawn(MESH_ACQUIRE, addr, acquire_task);
-	if (pid <= 0) {
-		blobmsg_add_string(b, "error", "spawn_failed");
-		return;
-	}
-
-	acquire_proc.pid = pid;
-	acquire_proc.cb = acquire_done;
-	uloop_process_add(&acquire_proc);
-
-	blobmsg_add_string(b, "task_id", acquire_task);
+	acquire_start("acquire", MESH_ACQUIRE, addr, addr, b);
 }
 
 void mesh_ctrl_release(const char *id, struct blob_buf *b)
 {
-	struct mesh_member *m, *target = NULL;
-	pid_t pid;
-
-	list_for_each_entry(m, &mesh_members, list)
-		if (!strcmp(m->id, id))
-			target = m;
+	struct mesh_member *target = member_by_id(id);
 
 	if (!target) {
 		blobmsg_add_string(b, "error", "not_found");
 		return;
 	}
 
-	if (acquire_busy()) {
-		blobmsg_add_string(b, "error", "busy");
-		blobmsg_add_string(b, "task_id", acquire_task);
-		return;
-	}
-
-	snprintf(acquire_task, sizeof(acquire_task), "%llu", (unsigned long long)roam_now);
-	snprintf(acquire_addr, sizeof(acquire_addr), "%s", target->addr);
-	acquire_kind = "release";
-
-	pid = mesh_spawn(MESH_RELEASE, id, acquire_task);
-	if (pid <= 0) {
-		blobmsg_add_string(b, "error", "spawn_failed");
-		return;
-	}
-
-	acquire_proc.pid = pid;
-	acquire_proc.cb = acquire_done;
-	uloop_process_add(&acquire_proc);
-
-	blobmsg_add_string(b, "task_id", acquire_task);
+	acquire_start("release", MESH_RELEASE, id, target->addr, b);
 }
 
 void mesh_ctrl_update(const char *id, struct blob_buf *b)
 {
-	struct mesh_member *m, *target = NULL;
-	pid_t pid;
-
-	list_for_each_entry(m, &mesh_members, list)
-		if (!strcmp(m->id, id))
-			target = m;
+	struct mesh_member *target = member_by_id(id);
 
 	if (!target) {
 		blobmsg_add_string(b, "error", "not_found");
 		return;
 	}
 
-	if (acquire_busy()) {
-		blobmsg_add_string(b, "error", "busy");
-		blobmsg_add_string(b, "task_id", acquire_task);
-		return;
-	}
+	acquire_start("update", MESH_UPDATE, target->addr, target->addr, b);
+}
 
-	snprintf(acquire_task, sizeof(acquire_task), "%llu", (unsigned long long)roam_now);
-	snprintf(acquire_addr, sizeof(acquire_addr), "%s", target->addr);
-	acquire_kind = "update";
-
-	pid = mesh_spawn(MESH_UPDATE, target->addr, acquire_task);
-	if (pid <= 0) {
-		blobmsg_add_string(b, "error", "spawn_failed");
-		return;
-	}
-
-	acquire_proc.pid = pid;
-	acquire_proc.cb = acquire_done;
-	uloop_process_add(&acquire_proc);
-
-	blobmsg_add_string(b, "task_id", acquire_task);
+void mesh_ctrl_self_update(struct blob_buf *b)
+{
+	acquire_start("selfupdate", MESH_SELFUPDATE, NULL, NULL, b);
 }
 
 void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 {
 	char path[128], *data, *line, *save;
+	bool running = acquire_busy() && !strcmp(task, acquire_task);
+	bool terminal = false;
+	struct stat st;
 	void *steps;
-	bool finished = true;
 
 	snprintf(path, sizeof(path), "%s/%s", ACQUIRE_DIR, task);
 	data = mesh_slurp(path, 8192);
 	if (!data) {
-		if (acquire_busy() && !strcmp(task, acquire_task)) {
+		if (running) {
 			void *empty;
 
 			blobmsg_add_u8(b, "running", 1);
@@ -259,11 +238,6 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 		blobmsg_add_string(b, "error", "no_such_task");
 		return;
 	}
-
-	if (acquire_busy() && !strcmp(task, acquire_task))
-		finished = false;
-
-	blobmsg_add_u8(b, "running", !finished);
 
 	steps = blobmsg_open_array(b, "steps");
 	for (line = strtok_r(data, "\n", &save); line;
@@ -284,8 +258,17 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 		blobmsg_add_string(b, "status", status);
 		blobmsg_add_string(b, "message", message ? message : "");
 		blobmsg_close_table(b, e);
+
+		terminal = !strcmp(status, "error") ||
+			   (!strcmp(line, "done") && !strcmp(status, "ok"));
 	}
 	blobmsg_close_array(b, steps);
+
+	if (!running && !terminal && !stat(path, &st) &&
+	    time(NULL) - st.st_mtime < TASK_STALE)
+		running = true;
+
+	blobmsg_add_u8(b, "running", running);
 
 	free(data);
 }

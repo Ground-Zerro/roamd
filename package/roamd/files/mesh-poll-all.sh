@@ -52,8 +52,8 @@ for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9
 		arch=$(echo "$report" | jsonfilter -e '@.arch' 2>/dev/null)
 		target=$(pkg_version "${os%.*}" "$arch" 2>/dev/null)
 		target_ui=$(pkg_version "${os%.*}" "$arch" luci-app-roamd 2>/dev/null)
-		if [ -n "$target" ] && { [ "$node_ver" != "$target" ] ||
-			{ [ -n "$node_ui" ] && [ -n "$target_ui" ] && [ "$node_ui" != "$target_ui" ]; }; }; then
+		if [ -n "$target" ] && { sys_newer "$target" "$node_ver" ||
+			{ [ -n "$node_ui" ] && [ -n "$target_ui" ] && sys_newer "$target_ui" "$node_ui"; }; }; then
 			upd=true
 			[ "$auto_update" = "1" ] && ubus -t 3 call roamd mesh_update "{\"id\":\"$id\"}" >/dev/null 2>&1
 		else

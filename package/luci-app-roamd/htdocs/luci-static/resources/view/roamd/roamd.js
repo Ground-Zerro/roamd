@@ -16,25 +16,19 @@ var callStatus = rpc.declare({
 	expect: { }
 });
 
-var callHostHints = rpc.declare({
-	object: 'luci-rpc',
-	method: 'getHostHints',
-	expect: { }
-});
-
 var statusData = {};
 var hostHints = {};
 
-function hostName(mac) {
-	var hint = hostHints[mac.toUpperCase()] || hostHints[mac.toLowerCase()];
+function clientCell(mac) {
+	var name = common.clientLabel(hostHints, common.deviceOverrides(), mac);
 
-	if (hint && hint.name)
-		return hint.name;
+	if (!name)
+		return E('strong', {}, mac);
 
-	if (hint && hint.ipaddrs && hint.ipaddrs.length)
-		return hint.ipaddrs[0];
-
-	return '';
+	return E('div', {}, [
+		E('div', {}, E('strong', {}, name)),
+		E('div', {}, E('small', { 'style': 'color:#888' }, mac))
+	]);
 }
 
 function toSigned(value) {
@@ -157,7 +151,7 @@ function renderClients() {
 		}
 
 		rows.push([
-			E('span', {}, [ E('strong', {}, mac), E('br'), E('small', {}, hostName(mac)) ]),
+			clientCell(mac),
 			'%s (%s)'.format(ifname, bandLabel(iface.band)),
 			formatSignal(client.signal),
 			'%t'.format(client.connected || 0),
@@ -530,7 +524,7 @@ return view.extend({
 	load: function () {
 		return Promise.all([
 			callStatus().catch(function () { return {}; }),
-			callHostHints().catch(function () { return {}; }),
+			common.hostHints(),
 			common.meshStatus()
 		]);
 	},
@@ -707,10 +701,16 @@ return view.extend({
 		o.value('2', _('Debug'));
 		o.default = '1';
 
+		this.handleSave = null;
+		this.handleSaveApply = function (ev, mode) {
+			return m.save().then(function () {
+				return ui.changes.apply(mode == '0');
+			});
+		};
+
 		if (!common.isNode(meshState))
 			return m.render();
 
-		this.handleSave = null;
 		this.handleSaveApply = null;
 		this.handleReset = null;
 

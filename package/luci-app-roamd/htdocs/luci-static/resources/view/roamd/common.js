@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require rpc';
+'require uci';
 
 var callMeshStatus = rpc.declare({
 	object: 'roamd',
@@ -8,9 +9,69 @@ var callMeshStatus = rpc.declare({
 	expect: { }
 });
 
+var callHostHints = rpc.declare({
+	object: 'luci-rpc',
+	method: 'getHostHints',
+	expect: { }
+});
+
+var localDomain = 'lan';
+
+function stripDomain(name) {
+	var tail = '.' + localDomain;
+
+	if (name.length > tail.length && name.slice(-tail.length).toLowerCase() === tail.toLowerCase())
+		return name.slice(0, -tail.length);
+
+	return name;
+}
+
 return baseclass.extend({
 	meshStatus: function() {
 		return callMeshStatus().catch(function() { return {}; });
+	},
+
+	hostHints: function() {
+		return Promise.all([
+			callHostHints().catch(function() { return {}; }),
+			uci.load('dhcp').catch(function() { return null; })
+		]).then(function(res) {
+			var domain = uci.get_first('dhcp', 'dnsmasq', 'domain');
+
+			if (domain)
+				localDomain = domain;
+
+			return res[0] || {};
+		});
+	},
+
+	hostName: function(hints, mac) {
+		var h = hints[mac.toUpperCase()] || hints[mac.toLowerCase()];
+
+		return (h && h.name) ? stripDomain(h.name) : '';
+	},
+
+	deviceOverrides: function() {
+		var map = {};
+
+		(uci.sections('roamd', 'device') || []).forEach(function(s) {
+			if (!s.mac)
+				return;
+
+			map[s.mac.toLowerCase()] = {
+				band: s.band || 'both',
+				alias: s.alias || '',
+				nodes: s.node ? (Array.isArray(s.node) ? s.node : [ s.node ]) : []
+			};
+		});
+
+		return map;
+	},
+
+	clientLabel: function(hints, overrides, mac) {
+		var key = mac.toLowerCase();
+
+		return (overrides[key] && overrides[key].alias) || this.hostName(hints, mac) || '';
 	},
 
 	isNode: function(state) {

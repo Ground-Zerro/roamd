@@ -19,12 +19,6 @@ var callMeshClients = rpc.declare({
 	expect: { clients: [] }
 });
 
-var callHostHints = rpc.declare({
-	object: 'luci-rpc',
-	method: 'getHostHints',
-	expect: { }
-});
-
 var callMeshSelfCheck = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_self_check',
@@ -82,6 +76,12 @@ var callMeshUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_update',
 	params: [ 'id' ],
+	expect: { }
+});
+
+var callMeshSelfUpdate = rpc.declare({
+	object: 'roamd',
+	method: 'mesh_self_update',
 	expect: { }
 });
 
@@ -242,6 +242,9 @@ var ACQUIRE_MSG = [
 	[ /^the node did not accept the reset, release it manually$/, function() { return _('the device did not accept the reset — reset it manually'); } ],
 	[ /^the node is still reachable, the reset may have failed$/, function() { return _('the device still answers — the reset may have failed'); } ],
 	[ /^the node is not in the system$/, function() { return _('the device is not in the system'); } ],
+	[ /^installing packages on the controller$/, function() { return _('installing the packages'); } ],
+	[ /^package index is not available$/, function() { return _('the package index is not available'); } ],
+	[ /^package installation failed$/, function() { return _('the packages could not be installed'); } ],
 	[ /^wpad: (.+)$/, function(m) { return m[1]; } ]
 ];
 
@@ -367,7 +370,7 @@ function acquireProgress(steps, kind) {
 	var state = {};
 	var first = steps.length ? steps[0].step : null;
 	var order = (kind === 'release' || first === 'reset') ? [ 'reset', 'done' ]
-		: (kind === 'update' || first === 'update') ? [ 'update', 'done' ]
+		: (kind === 'update' || kind === 'selfupdate' || first === 'update') ? [ 'update', 'done' ]
 		: ACQUIRE_ORDER.slice();
 	var reached = -1;
 	var failed = null;
@@ -397,7 +400,8 @@ function acquireProgress(steps, kind) {
 		else if (!state[step])
 			text = _('waiting');
 		else if (done && step === 'done')
-			text = (kind === 'update' || s.message === 'updated') ? _('the node is up to date')
+			text = kind === 'selfupdate' ? _('the controller is up to date')
+				: (kind === 'update' || s.message === 'updated') ? _('the node is up to date')
 				: kind === 'release' ? _('the device is released')
 				: _('the node is part of the system');
 		else
@@ -477,9 +481,11 @@ function renderNodes(state) {
 	}, _('Add a new node'));
 
 	var kind = busy ? state.acquire.kind : '';
-	var kindTitle = kind === 'update' ? _('Updating the node')
+	var kindTitle = kind === 'selfupdate' ? _('Updating the controller')
+		: kind === 'update' ? _('Updating the node')
 		: kind === 'release' ? _('Remove the node') : _('Capturing the node');
-	var kindNote = kind === 'update' ? _('A node is being updated now')
+	var kindNote = kind === 'selfupdate' ? _('The controller is being updated now')
+		: kind === 'update' ? _('A node is being updated now')
 		: kind === 'release' ? _('A node is being removed now') : _('A node is being captured now');
 
 	var running = !busy ? '' : E('div', { 'class': 'alert-message' }, [
@@ -596,7 +602,7 @@ function checkSelfUpdate() {
 
 		if (res.error === 'no_repository') {
 			dom.content(body, [
-				E('p', {}, _('No package repository is configured. Set it on the Settings tab.')),
+				E('p', {}, _('The roamd package repository is not connected on this device. Run install.sh again to add it.')),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
@@ -619,9 +625,17 @@ function checkSelfUpdate() {
 			]);
 		});
 
+		var buttons = [ E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')) ];
+
+		if (res.update_available && !readOnly)
+			buttons.push(' ', E('button', {
+				'class': 'btn cbi-button cbi-button-action',
+				'click': function() { startSelfUpdate(body); }
+			}, _('Update the controller')));
+
 		dom.content(body, [
 			E('p', {}, res.update_available
-				? _('A newer version is available. Install it on this device the same way you installed the current one.')
+				? _('A newer version is available. The controller can install it itself.')
 				: _('This device runs the newest packages from the repository.')),
 			E('table', { 'class': 'table' }, [
 				E('tr', { 'class': 'tr table-titles' }, [
@@ -631,13 +645,31 @@ function checkSelfUpdate() {
 					E('th', { 'class': 'th' }, '')
 				])
 			].concat(rows)),
-			E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
+			E('div', { 'class': 'right' }, buttons)
 		]);
 	}, function() {
 		dom.content(body, [
 			E('p', { 'class': 'alert-message warning' }, _('The check failed.')),
 			E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 		]);
+	});
+}
+
+function startSelfUpdate(body) {
+	dom.content(body, E('p', { 'class': 'spinning' }, _('Installing the packages…')));
+
+	callMeshSelfUpdate().then(function(res) {
+		res = res || {};
+
+		if (res.error && !res.task_id) {
+			dom.content(body, [
+				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
+			]);
+			return;
+		}
+
+		pollAcquire(res.task_id, body, 0, 'selfupdate');
 	});
 }
 
@@ -838,14 +870,14 @@ function renderLog() {
 
 	Promise.all([
 		callMeshLog().catch(function() { return []; }),
-		callHostHints().catch(function() { return {}; }),
+		common.hostHints(),
 		uci.load('roamd').catch(function() { return null; })
 	]).then(function(res) {
-		var ov = deviceOverrides();
+		var ov = common.deviceOverrides();
 
 		logNames = {};
 		for (var mac in (res[1] || {}))
-			logNames[mac.toLowerCase()] = hintName(res[1], mac) || '';
+			logNames[mac.toLowerCase()] = common.hostName(res[1], mac);
 		for (var m in ov)
 			if (ov[m].alias)
 				logNames[m] = ov[m].alias;
@@ -870,12 +902,6 @@ function humanBytes(n) {
 	return '%s %s'.format(i ? n.toFixed(2) : String(n), units[i]);
 }
 
-function hintName(hints, mac) {
-	var h = hints[mac.toUpperCase()] || hints[mac.toLowerCase()];
-
-	return h && h.name ? h.name : '';
-}
-
 function hintIp4(hints, mac) {
 	var h = hints[mac.toUpperCase()] || hints[mac.toLowerCase()] || {};
 
@@ -892,19 +918,6 @@ function hintIp6(hints, mac) {
 		return h.ip6addrs;
 
 	return h.ipv6 ? [ h.ipv6 ] : [];
-}
-
-function deviceOverrides() {
-	var map = {};
-
-	(uci.sections('roamd', 'device') || []).forEach(function(s) {
-		if (!s.mac)
-			return;
-		var nodes = s.node ? (Array.isArray(s.node) ? s.node : [ s.node ]) : [];
-		map[s.mac.toLowerCase()] = { band: s.band || 'both', alias: s.alias || '', nodes: nodes };
-	});
-
-	return map;
 }
 
 function bandLockLabel(band) {
@@ -1033,7 +1046,7 @@ function nodeChips(allNodes, allowed) {
 function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 	var mac = c.mac.toLowerCase();
 	var saved = ov[mac] || { band: 'both', alias: '', nodes: [] };
-	var sysName = hintName(hints, c.mac) || '';
+	var sysName = common.hostName(hints, c.mac) || c.host || '';
 	var title = saved.alias || sysName || c.mac;
 	var nameInput = E('input', {
 		'type': 'text', 'class': 'cbi-input-text', 'style': 'width:100%',
@@ -1117,7 +1130,7 @@ function viaNodeLabel(c, nodeName) {
 
 function clientNameCell(c, hints, ov, nodeName) {
 	var mac = c.mac.toLowerCase();
-	var alias = (ov[mac] && ov[mac].alias) || hintName(hints, c.mac) || c.mac;
+	var alias = common.clientLabel(hints, ov, c.mac) || c.host || c.mac;
 	var dot = E('span', {
 		'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%%;margin-right:.5em;background:%s'
 			.format(c.online ? '#2e9e2e' : '#bbb')
@@ -1266,12 +1279,12 @@ function renderClients(state) {
 
 		return Promise.all([
 			callMeshClients().catch(function() { return {}; }),
-			callHostHints().catch(function() { return {}; }),
+			common.hostHints(),
 			uci.load('roamd').catch(function() { return null; })
 		]).then(function(res) {
 			var clients = (res[0] && res[0].clients) || res[0] || [];
 			var hints = res[1] || {};
-			var ov = deviceOverrides();
+			var ov = common.deviceOverrides();
 			var service = serviceMacs(members);
 			var up = [];
 			var down = [];
