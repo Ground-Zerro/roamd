@@ -1,0 +1,5 @@
+build/
+dist/
+research/
+docs/
+package/luci-app-roamd/test/

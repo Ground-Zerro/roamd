@@ -1,0 +1,26 @@
+{
+	"admin/network/roamd": {
+		"title": "Wi-Fi Roaming",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "roamd/roamd"
+		},
+		"depends": {
+			"acl": [ "luci-app-roamd" ],
+			"uci": { "roamd": true }
+		}
+	},
+	"admin/network/roamd_mesh": {
+		"title": "MESH",
+		"order": 26,
+		"action": {
+			"type": "view",
+			"path": "roamd/mesh"
+		},
+		"depends": {
+			"acl": [ "luci-app-roamd" ],
+			"uci": { "roamd": true }
+		}
+	}
+}

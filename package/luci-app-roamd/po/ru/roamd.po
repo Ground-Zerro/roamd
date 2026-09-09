@@ -1,0 +1,973 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: ru\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "Wi-Fi Roaming"
+msgstr "Роуминг Wi-Fi"
+
+msgid "Seamless roaming between the 2.4 GHz and 5 GHz networks of this router. Both bands must use the same SSID and the same password."
+msgstr "Бесшовный переход между сетями 2,4 ГГц и 5 ГГц этого роутера. У обоих диапазонов должны совпадать имя сети и пароль."
+
+msgid "General"
+msgstr "Основные настройки"
+
+msgid "Enable roaming"
+msgstr "Включить роуминг"
+
+msgid "Start the roaming daemon."
+msgstr "Запускать службу роуминга."
+
+msgid "Network (SSID)"
+msgstr "Сеть (SSID)"
+
+msgid "Leave empty to manage every access point of this router."
+msgstr "Оставьте пустым, чтобы управлять всеми точками доступа роутера."
+
+msgid "all networks"
+msgstr "все сети"
+
+msgid "Band steering"
+msgstr "Выбор диапазона"
+
+msgid "Move dual-band clients to the preferred band when its signal is good enough."
+msgstr "Переводить двухдиапазонные устройства в предпочитаемый диапазон, если сигнал в нём достаточно хороший."
+
+msgid "Preferred band"
+msgstr "Предпочитаемый диапазон"
+
+msgid "5 GHz"
+msgstr "5 ГГц"
+
+msgid "2.4 GHz"
+msgstr "2,4 ГГц"
+
+msgid "No preference"
+msgstr "Без предпочтения"
+
+msgid "Fast roaming (802.11r)"
+msgstr "Быстрый переход (802.11r)"
+
+msgid "Fast transition between the bands without a full reauthentication. Requires WPA2/WPA3 with a pre-shared key. Very old clients may fail to connect."
+msgstr "Переход между диапазонами без повторной аутентификации. Требуется WPA2/WPA3 с общим ключом. Очень старые устройства могут перестать подключаться."
+
+msgid "802.11r over the distribution system"
+msgstr "802.11r через проводную сеть"
+
+msgid "Perform the fast transition over the wired side instead of over the air."
+msgstr "Выполнять быстрый переход по проводной сети, а не по эфиру."
+
+msgid "Mobility domain"
+msgstr "Домен мобильности"
+
+msgid "Four hexadecimal digits shared by all access points of one roaming domain. Leave empty to derive it from the SSID."
+msgstr "Четыре шестнадцатеричные цифры, общие для всех точек доступа одной зоны роуминга. Оставьте пустым для автоматического значения из SSID."
+
+msgid "automatic"
+msgstr "автоматически"
+
+msgid "Neighbour reports (802.11k)"
+msgstr "Отчёты о соседях (802.11k)"
+
+msgid "Tell clients about the other band so they can find it without a full scan."
+msgstr "Сообщать устройствам о втором диапазоне, чтобы они находили его без полного сканирования."
+
+msgid "Assisted roaming (802.11v)"
+msgstr "Управляемый роуминг (802.11v)"
+
+msgid "Ask connected clients to move to the other band."
+msgstr "Предлагать подключённым устройствам перейти в другой диапазон."
+
+msgid "Configure wireless automatically"
+msgstr "Настраивать Wi-Fi автоматически"
+
+msgid "Write the 802.11k/v/r options into the wireless configuration. Turn this off to manage them by hand."
+msgstr "Записывать параметры 802.11k/v/r в конфигурацию Wi-Fi. Отключите, чтобы настраивать их вручную."
+
+msgid "Switching parameters"
+msgstr "Параметры переключения"
+
+msgid "The defaults suit most homes. Change them only if the behaviour does not suit you."
+msgstr "Значения по умолчанию подходят для большинства квартир. Меняйте, только если поведение вас не устраивает."
+
+msgid "Good signal"
+msgstr "Хороший сигнал"
+
+msgid "Above this level the preferred band is considered usable and the client is steered to it."
+msgstr "Выше этого уровня предпочитаемый диапазон считается пригодным, и устройство переводится в него."
+
+msgid "Weak signal"
+msgstr "Слабый сигнал"
+
+msgid "Below this level the preferred band is not offered to the client."
+msgstr "Ниже этого уровня предпочитаемый диапазон устройству не предлагается."
+
+msgid "Band difference"
+msgstr "Разница между диапазонами"
+
+msgid "Keep the client where it is when the current band is this many dB stronger."
+msgstr "Оставлять устройство на месте, если текущий диапазон сильнее на столько дБ."
+
+msgid "Cross-band correction"
+msgstr "Поправка между диапазонами"
+
+msgid "Assumed difference in dB between the bands when no measurement of the other band is available."
+msgstr "Предполагаемая разница в дБ между диапазонами, когда измерений второго диапазона нет."
+
+msgid "Disconnect threshold"
+msgstr "Порог отключения"
+
+msgid "A client below this level is moved away even from the preferred band."
+msgstr "Устройство с сигналом ниже этого уровня уводится даже из предпочитаемого диапазона."
+
+msgid "Hide the non-preferred band"
+msgstr "Скрывать непредпочитаемый диапазон"
+
+msgid "Do not answer probe and authentication requests on the non-preferred band while the preferred one is good."
+msgstr "Не отвечать на запросы поиска и аутентификации в непредпочитаемом диапазоне, пока предпочитаемый в порядке."
+
+msgid "Force disconnect"
+msgstr "Принудительное отключение"
+
+msgid "Disconnect clients that ignore the roaming request. For devices without 802.11v support this is the only way to move them: until it is enabled, such a client stays on a dying link until it decides to leave on its own, which can take minutes. Some clients reconnect to the same band."
+msgstr "Отключать клиентов, игнорирующих запрос на переход. Для устройств без поддержки 802.11v это единственный способ их сдвинуть: пока настройка выключена, такой клиент держится за умирающую связь, пока не решит уйти сам, — это может занять минуты. Некоторые клиенты переподключаются к тому же диапазону."
+
+msgid "Delay before disconnect"
+msgstr "Задержка перед отключением"
+
+msgid "Milliseconds between the roaming request and the forced disconnect."
+msgstr "Миллисекунды между запросом на переход и принудительным отключением."
+
+msgid "Hold time"
+msgstr "Время удержания"
+
+msgid "Milliseconds to wait before steering the same client again."
+msgstr "Сколько миллисекунд ждать перед повторной попыткой перевода того же устройства."
+
+msgid "Steering attempts"
+msgstr "Попыток перевода"
+
+msgid "Give up after this many unsuccessful attempts."
+msgstr "Прекращать попытки после указанного числа неудач."
+
+msgid "Block duration"
+msgstr "Длительность блокировки"
+
+msgid "Milliseconds the non-preferred band stays hidden from one client."
+msgstr "Сколько миллисекунд непредпочитаемый диапазон остаётся скрытым для устройства."
+
+msgid "5 GHz observation window"
+msgstr "Окно наблюдения 5 ГГц"
+
+msgid "Milliseconds a 5 GHz measurement stays valid for the connection decision."
+msgstr "Сколько миллисекунд измерение на 5 ГГц считается актуальным при решении о подключении."
+
+msgid "2.4 GHz observation window"
+msgstr "Окно наблюдения 2,4 ГГц"
+
+msgid "Milliseconds a 2.4 GHz measurement stays valid for the connection decision."
+msgstr "Сколько миллисекунд измерение на 2,4 ГГц считается актуальным при решении о подключении."
+
+msgid "Client record lifetime"
+msgstr "Время хранения записи об устройстве"
+
+msgid "Milliseconds an inactive client is remembered."
+msgstr "Сколько миллисекунд помнить неактивное устройство."
+
+msgid "Poll interval"
+msgstr "Интервал опроса"
+
+msgid "Milliseconds between signal measurements."
+msgstr "Миллисекунды между измерениями сигнала."
+
+msgid "Beacon request interval"
+msgstr "Интервал запроса маяков"
+
+msgid "Milliseconds between 802.11k measurements of the other band."
+msgstr "Миллисекунды между измерениями другого диапазона по 802.11k."
+
+msgid "Log level"
+msgstr "Уровень журнала"
+
+msgid "Errors only"
+msgstr "Только ошибки"
+
+msgid "Normal"
+msgstr "Обычный"
+
+msgid "Debug"
+msgstr "Отладочный"
+
+msgid "Roaming status"
+msgstr "Состояние роуминга"
+
+msgid "Wireless interfaces"
+msgstr "Радиоинтерфейсы"
+
+msgid "Clients"
+msgstr "Устройства"
+
+msgid "Interface"
+msgstr "Интерфейс"
+
+msgid "Band"
+msgstr "Диапазон"
+
+msgid "Channel"
+msgstr "Канал"
+
+msgid "State"
+msgstr "Состояние"
+
+msgid "running"
+msgstr "работает"
+
+msgid "down"
+msgstr "выключен"
+
+msgid "yes"
+msgstr "да"
+
+msgid "no"
+msgstr "нет"
+
+msgid "No wireless interfaces found"
+msgstr "Радиоинтерфейсы не найдены"
+
+msgid "Client"
+msgstr "Устройство"
+
+msgid "Connected to"
+msgstr "Подключено к"
+
+msgid "Signal"
+msgstr "Сигнал"
+
+msgid "Uptime"
+msgstr "Время в сети"
+
+msgid "Signal per band"
+msgstr "Сигнал по диапазонам"
+
+msgid "unknown"
+msgstr "неизвестно"
+
+msgid "rejected"
+msgstr "отклонено"
+
+msgid "No connected clients"
+msgstr "Нет подключённых устройств"
+
+msgid "GHz"
+msgstr "ГГц"
+
+msgid "Allowed band"
+msgstr "Разрешённый диапазон"
+
+msgid "both bands"
+msgstr "оба диапазона"
+
+msgid "only 2.4 GHz"
+msgstr "только 2,4 ГГц"
+
+msgid "only 5 GHz"
+msgstr "только 5 ГГц"
+
+msgid "6 GHz"
+msgstr "6 ГГц"
+
+msgid "Roaming network wizard"
+msgstr "Мастер создания сети с роумингом"
+
+msgid "Create a roaming network…"
+msgstr "Создать сеть с роумингом…"
+
+msgid "Quick setup: one name and password for both bands, roaming enabled automatically."
+msgstr "Быстрая настройка: одно имя и пароль на оба диапазона, роуминг включается автоматически."
+
+msgid "Creates one network on every band with the same name and password, and turns roaming on. Channel, width and other details can be adjusted later under Network → Wireless."
+msgstr "Создаёт сеть с одинаковым именем и паролем на каждом диапазоне и включает роуминг. Канал, ширину и прочие детали можно настроить позже в разделе «Сеть → Беспроводная сеть»."
+
+msgid "Radios that will be used:"
+msgstr "Будут задействованы радиоинтерфейсы:"
+
+msgid "currently disabled"
+msgstr "сейчас выключен"
+
+msgid "Network name (SSID)"
+msgstr "Имя сети (SSID)"
+
+msgid "for example, Home"
+msgstr "например, Home"
+
+msgid "Encryption"
+msgstr "Шифрование"
+
+msgid "Only the modes that support fast roaming are offered."
+msgstr "Предлагаются только режимы, поддерживающие быстрый роуминг."
+
+msgid "WPA2 (compatible with everything)"
+msgstr "WPA2 (совместим со всем)"
+
+msgid "WPA2/WPA3 (recommended)"
+msgstr "WPA2/WPA3 (рекомендуется)"
+
+msgid "WPA3 only (modern devices)"
+msgstr "Только WPA3 (современные устройства)"
+
+msgid "Password"
+msgstr "Пароль"
+
+msgid "at least 8 characters"
+msgstr "не менее 8 символов"
+
+msgid "Create network"
+msgstr "Создать сеть"
+
+msgid "Creating the network…"
+msgstr "Создаётся сеть…"
+
+msgid "Nothing has been changed."
+msgstr "Изменения в систему не вносились."
+
+msgid "This system has no hostapd with ubus support, so a roaming network cannot be created."
+msgstr "В системе нет hostapd с поддержкой ubus — создать сеть с роумингом невозможно."
+
+msgid "No wireless radios were found on this device."
+msgstr "На устройстве не найдено ни одного радиоинтерфейса."
+
+msgid "This device has radios of one band only. Roaming between 2.4 GHz and 5 GHz needs at least two radios on different bands."
+msgstr "На устройстве есть радиоинтерфейсы только одного диапазона. Для роуминга между 2,4 ГГц и 5 ГГц нужно минимум два радиоинтерфейса разных диапазонов."
+
+msgid "This hostapd build has no 802.11r support. Roaming will work through 802.11k and 802.11v, but transitions will be slower."
+msgstr "Установленная сборка hostapd не поддерживает 802.11r. Роуминг будет работать через 802.11k и 802.11v, но переходы станут медленнее."
+
+msgid "The following radios are currently disabled and will be switched on: %s."
+msgstr "Следующие радиоинтерфейсы сейчас выключены и будут включены: %s."
+
+msgid "The network name must be between 1 and 32 bytes long."
+msgstr "Имя сети должно быть длиной от 1 до 32 байт."
+
+msgid "The password must be between 8 and 63 characters long."
+msgstr "Пароль должен быть длиной от 8 до 63 символов."
+
+msgid "Roaming"
+msgstr "Роуминг"
+
+msgid "works"
+msgstr "работает"
+
+msgid "partly"
+msgstr "частично"
+
+msgid "paired with %s"
+msgstr "в паре с %s"
+
+msgid "not handled by the service"
+msgstr "не управляется службой"
+
+msgid "no access point of the other band with this name"
+msgstr "нет точки другого диапазона с этим именем сети"
+
+msgid "one of the access points is disabled"
+msgstr "одна из точек выключена"
+
+msgid "encryption types differ"
+msgstr "разные типы шифрования"
+
+msgid "passwords differ"
+msgstr "разные пароли"
+
+msgid "the access points are bridged to different networks"
+msgstr "точки подключены к разным сетям"
+
+msgid "802.11k is off"
+msgstr "802.11k выключен"
+
+msgid "802.11v is off"
+msgstr "802.11v выключен"
+
+msgid "802.11r is configured inconsistently"
+msgstr "802.11r настроен несогласованно"
+
+msgid "neighbour reports not exchanged yet"
+msgstr "точки ещё не обменялись отчётами о соседях"
+
+# Mesh Wi-Fi system
+msgid "802.11r differs"
+msgstr "802.11r различается"
+
+msgid "A capture is already in progress."
+msgstr "Захват уже выполняется."
+
+msgid "A hidden Wi-Fi network the nodes use to talk to each other. Leave the name and key empty to generate them automatically."
+msgstr "Скрытая сеть Wi-Fi, через которую узлы связываются друг с другом. Оставьте имя и ключ пустыми для автоматической генерации."
+
+msgid "Add a new node"
+msgstr "Добавить новый узел"
+
+msgid "Automatic update"
+msgstr "Автоматическое обновление"
+
+msgid "Backhaul key"
+msgstr "Ключ транспортной сети"
+
+msgid "Backhaul network name"
+msgstr "Имя транспортной сети"
+
+msgid "Capture"
+msgstr "Захватить"
+
+msgid "Capturing %s…"
+msgstr "Захват %s…"
+
+msgid "Capturing the node"
+msgstr "Захват узла"
+
+msgid "Client transitions between the nodes of the Wi-Fi system are shown here."
+msgstr "Здесь отображаются переходы клиентов между узлами Wi-Fi-системы."
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Connection"
+msgstr "Подключение"
+
+msgid "Controller"
+msgstr "Контроллер"
+
+msgid "Could not start the capture task."
+msgstr "Не удалось запустить задачу захвата."
+
+msgid "Done"
+msgstr "Готово"
+
+msgid "Download CSV"
+msgstr "Скачать в формате CSV"
+
+msgid "From"
+msgstr "От"
+
+msgid "IP address"
+msgstr "IP-адрес"
+
+msgid "If the device is not found or the capture does not finish, reset it to factory settings and try again."
+msgstr "Если устройство не найдено или захват не завершается, сбросьте его к заводским настройкам и повторите попытку."
+
+msgid "MAC"
+msgstr "MAC"
+
+msgid "Mesh Wi-Fi system"
+msgstr "Mesh Wi-Fi-система"
+
+msgid "No devices found. Reset the new device to factory settings and make sure it has no password, then try again."
+msgstr "Устройства не найдены. Сбросьте новое устройство к заводским настройкам, убедитесь, что на нём нет пароля, и повторите попытку."
+
+msgid "No nodes yet"
+msgstr "Узлов пока нет"
+
+msgid "Node name"
+msgstr "Имя узла"
+
+msgid "Nodes"
+msgstr "Узлы"
+
+msgid "Nodes stop broadcasting the Wi-Fi network while the controller is not available."
+msgstr "Узлы прекращают вещание сети Wi-Fi, пока контроллер недоступен."
+
+msgid "Remove"
+msgstr "Удалить"
+
+msgid "SSID differs"
+msgstr "SSID различается"
+
+msgid "Save"
+msgstr "Сохранить"
+
+msgid "Save failed."
+msgstr "Не удалось сохранить."
+
+msgid "Saved."
+msgstr "Сохранено."
+
+msgid "Saving…"
+msgstr "Сохранение…"
+
+msgid "Scanning the local network…"
+msgstr "Сканирование локальной сети…"
+
+msgid "Settings"
+msgstr "Настройки"
+
+msgid "Showing %d of %d records"
+msgstr "Отображается %d из %d записей"
+
+msgid "Status"
+msgstr "Статус"
+
+msgid "The transition log is empty"
+msgstr "Журнал переходов пуст"
+
+msgid "This device works as the Mesh Wi-Fi system controller. Add other OpenWrt devices to build one wireless system with central management and monitoring."
+msgstr "Это устройство работает как контроллер Mesh Wi-Fi-системы. Добавляйте другие устройства OpenWrt, чтобы построить единую беспроводную систему с централизованным управлением и мониторингом."
+
+msgid "Time"
+msgstr "Время"
+
+msgid "To"
+msgstr "К"
+
+msgid "Transition log"
+msgstr "Журнал переходов"
+
+msgid "Turn off node access points when the controller is unreachable"
+msgstr "Отключать точки доступа узлов, когда контроллер недоступен"
+
+msgid "Type"
+msgstr "Тип"
+
+msgid "Update"
+msgstr "Обновить"
+
+msgid "Updating %s…"
+msgstr "Обновление %s…"
+
+msgid "Updating the node"
+msgstr "Обновление узла"
+
+msgid "Version"
+msgstr "Версия"
+
+msgid "Via"
+msgstr "Через"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Wi-Fi operation mode"
+msgstr "Режим работы Wi-Fi"
+
+msgid "Wireless backhaul"
+msgstr "Беспроводная транспортная сеть"
+
+msgid "all types"
+msgstr "все типы"
+
+msgid "Cable"
+msgstr "Кабель"
+
+msgid "connected"
+msgstr "подключение"
+
+msgid "controller"
+msgstr "контроллер"
+
+msgid "disconnected"
+msgstr "отключение"
+
+msgid "encryption differs"
+msgstr "шифрование различается"
+
+msgid "mobility domain differs"
+msgstr "mobility domain различается"
+
+msgid "offline"
+msgstr "не в сети"
+
+msgid "online"
+msgstr "в сети"
+
+msgid "roamd is updated automatically on all nodes when a newer package is available."
+msgstr "roamd обновляется автоматически на всех узлах при появлении более новой версии пакета."
+
+msgid "roaming"
+msgstr "роуминг"
+
+msgid "roaming broken"
+msgstr "роуминг не работает"
+
+msgid "roaming degraded"
+msgstr "роуминг ограничен"
+
+msgid "steering"
+msgstr "перевод"
+
+msgid "update available"
+msgstr "доступно обновление"
+
+# MESH: раздел «Клиенты»
+msgid "Address"
+msgstr "Адрес"
+
+msgid "Parameters"
+msgstr "Параметры"
+
+msgid "Traffic"
+msgstr "Трафик"
+
+msgid "Edit"
+msgstr "Изменить"
+
+msgid "Client name"
+msgstr "Имя клиента"
+
+msgid "via %s"
+msgstr "через %s"
+
+msgid "Wi-Fi %s GHz"
+msgstr "Wi-Fi %s ГГц"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "MHz"
+msgstr "МГц"
+
+msgid "Mbit/s"
+msgstr "Мбит/с"
+
+msgid "B"
+msgstr "Б"
+
+msgid "KB"
+msgstr "КБ"
+
+msgid "MB"
+msgstr "МБ"
+
+msgid "GB"
+msgstr "ГБ"
+
+msgid "TB"
+msgstr "ТБ"
+
+msgid "OK"
+msgstr "Ок"
+
+msgid "Rename node"
+msgstr "Переименование узла"
+
+msgid "Package repository"
+msgstr "Репозиторий пакетов"
+
+msgid "Where the controller takes roamd packages for the nodes. Only https:// is accepted, and the repository certificate must be placed in /etc/roamd/pkg.crt — the delivery installs software on every node."
+msgstr "Откуда контроллер берёт пакеты roamd для узлов. Принимается только https://, а сертификат репозитория должен лежать в /etc/roamd/pkg.crt — доставка устанавливает программы на каждый узел."
+
+msgid "Broadcast on bands"
+msgstr "Вещается в диапазонах"
+
+msgid "not broadcasting"
+msgstr "не вещается"
+
+msgid "package taken from the repository"
+msgstr "пакет получен из репозитория"
+
+msgid "repository was unreachable, package taken from the controller cache"
+msgstr "репозиторий был недоступен, пакет взят из кеша контроллера"
+
+msgid "This device is managed by the Mesh controller %s%s. Settings on this page are read-only: they come from the controller. To take the device out of the Wi-Fi system, reset it to factory settings."
+msgstr "Это устройство управляется Mesh-контроллером %s%s. Настройки на этой странице доступны только для просмотра — они приходят от контроллера. Чтобы вывести устройство из Wi-Fi-системы, сбросьте его до заводских настроек."
+
+msgid "The controller has not been in touch for %t — settings stay locked until it returns."
+msgstr "Контроллер не выходит на связь уже %t — настройки останутся заблокированными до его возвращения."
+
+msgid "This node is part of the Wi-Fi system managed by the controller below. The node knows about the controller and about its own clients; the rest of the system is visible on the controller."
+msgstr "Этот узел входит в Wi-Fi-систему под управлением контроллера ниже. Узлу известны контроллер и его собственные клиенты; остальная часть системы видна на контроллере."
+
+msgid "Link"
+msgstr "Связь"
+
+msgid "This node"
+msgstr "Этот узел"
+
+msgid "in touch"
+msgstr "на связи"
+
+msgid "no contact for %t"
+msgstr "нет связи уже %t"
+
+msgid "Managed by the controller"
+msgstr "Управляется контроллером"
+
+msgid "show"
+msgstr "показать"
+
+msgid "checking the device"
+msgstr "проверка устройства"
+
+msgid "compatibility"
+msgstr "совместимость"
+
+msgid "installing packages"
+msgstr "установка пакетов"
+
+msgid "switching to the single subnet"
+msgstr "перевод в единую подсеть"
+
+msgid "rolling out the profile"
+msgstr "раскатка профиля"
+
+msgid "enrolling the node"
+msgstr "включение узла в систему"
+
+msgid "finished"
+msgstr "готово"
+
+msgid "Basic settings"
+msgstr "Основные настройки"
+
+msgid "Wi-Fi bands allowed for this device"
+msgstr "Разрешённые для подключения диапазоны Wi-Fi"
+
+msgid "Wi-Fi system nodes allowed for this device"
+msgstr "Разрешённые для подключения узлы Wi-Fi-системы"
+
+msgid "Restore default roaming"
+msgstr "Восстановить роуминг по умолчанию"
+
+msgid "Details"
+msgstr "Дополнительные сведения"
+
+msgid "Device name"
+msgstr "Имя устройства"
+
+msgid "MAC address"
+msgstr "MAC-адрес"
+
+msgid "Rate"
+msgstr "Скорость"
+
+msgid "Received by client"
+msgstr "Принято клиентом"
+
+msgid "Sent by client"
+msgstr "Отправлено клиентом"
+
+msgid "Forget device"
+msgstr "Забыть устройство"
+
+msgid "Online"
+msgstr "В сети"
+
+msgid "Offline"
+msgstr "Не в сети"
+
+msgid "No clients online"
+msgstr "Нет клиентов в сети"
+
+msgid "No offline clients"
+msgstr "Нет отключившихся клиентов"
+
+msgid "Controller name"
+msgstr "Имя контроллера"
+
+msgid "This device"
+msgstr "Это устройство"
+
+msgid "no updates available"
+msgstr "обновлений нет"
+
+msgid "All devices of the Wi-Fi system: the node they are connected through, addresses, connection type and parameters, traffic. The settings button opens the name, allowed bands and allowed nodes of a device."
+msgstr "Все устройства Wi-Fi-системы: через какой узел подключены, адреса, тип и параметры подключения, трафик. Кнопка настроек открывает имя устройства, разрешённые диапазоны и узлы."
+
+msgid "forced disconnect"
+msgstr "принудительное отключение"
+
+msgid "Check for updates"
+msgstr "Проверить обновления"
+
+msgid "Checking the repository…"
+msgstr "Проверяем репозиторий…"
+
+msgid "No package repository is configured. Set it on the Settings tab."
+msgstr "Репозиторий пакетов не задан. Укажите его на вкладке «Настройки»."
+
+msgid "The repository is unreachable."
+msgstr "Репозиторий недоступен."
+
+msgid "The check failed."
+msgstr "Проверка не удалась."
+
+msgid "A newer version is available. Install it on this device the same way you installed the current one."
+msgstr "Доступна более свежая версия. Установите её на это устройство так же, как устанавливали текущую."
+
+msgid "This device runs the newest packages from the repository."
+msgstr "На устройстве установлены самые свежие пакеты из репозитория."
+
+msgid "Package"
+msgstr "Пакет"
+
+msgid "Installed"
+msgstr "Установлено"
+
+msgid "Repository"
+msgstr "В репозитории"
+
+msgid "up to date"
+msgstr "актуально"
+
+msgid "this device"
+msgstr "это устройство"
+
+msgid "A node is being captured now"
+msgstr "Сейчас идёт захват узла"
+
+msgid "A node is being updated now"
+msgstr "Сейчас идёт обновление узла"
+
+msgid "Device %s, it takes a few minutes. Do not start another task and do not reset the device."
+msgstr "Устройство %s, это занимает несколько минут. Не запускайте другую задачу и не сбрасывайте устройство."
+
+msgid "It takes a few minutes. Do not start another task and do not reset the device."
+msgstr "Это занимает несколько минут. Не запускайте другую задачу и не сбрасывайте устройство."
+
+msgid "No device address given."
+msgstr "Не указан адрес устройства."
+
+msgid "Preparing the controller is not finished"
+msgstr "Подготовка контроллера не завершена"
+
+msgid "Reading the progress…"
+msgstr "Читаем состояние…"
+
+msgid "Remove the node"
+msgstr "Удаление узла"
+
+msgid "Remove the node %s from the Wi-Fi system?"
+msgstr "Удалить узел %s из Wi-Fi-системы?"
+
+msgid "Removing %s…"
+msgstr "Удаляем %s…"
+
+msgid "Show progress"
+msgstr "Показать ход"
+
+msgid "The capture task is gone."
+msgstr "Задача захвата пропала."
+
+msgid "The controller retries by itself every five minutes; make sure it has Internet access."
+msgstr "Контроллер повторяет попытку каждые пять минут — убедитесь, что у него есть доступ в интернет."
+
+msgid "This node is already being captured, showing the progress."
+msgstr "Этот узел уже захватывается, показываем ход процесса."
+
+msgid "another task is running"
+msgstr "выполняется другая задача"
+
+msgid "the required packages are not installed yet"
+msgstr "нужные пакеты ещё не установлены"
+
+msgid "waiting"
+msgstr "ожидание"
+
+msgid "Reset the device to factory settings"
+msgstr "Сбросить устройство к заводским настройкам"
+
+msgid "The node could not be removed."
+msgstr "Удалить узел не удалось."
+
+msgid "The node has been removed from the system."
+msgstr "Узел удалён из системы."
+
+msgid "With the reset the device becomes independent again and can be captured anew. Without it the controller only stops managing the device, and it keeps working with the profile it has already received."
+msgstr "Со сбросом устройство снова становится самостоятельным, и его можно захватить заново. Без сброса контроллер просто перестанет им управлять, а устройство продолжит работать с уже полученным профилем."
+
+msgid "assigning the node role"
+msgstr "назначаем роль узла"
+
+msgid "checking 802.11v support"
+msgstr "проверяем поддержку 802.11v"
+
+msgid "done"
+msgstr "выполнено"
+
+msgid "in progress"
+msgstr "выполняется"
+
+msgid "installing the service key"
+msgstr "ставим служебный ключ"
+
+msgid "key login failed, the node restores password login itself"
+msgstr "вход по ключу не сработал, узел сам вернёт вход по паролю"
+
+msgid "packages for OpenWrt %s"
+msgstr "пакеты для OpenWrt %s"
+
+msgid "repository unreachable, installed from the cache"
+msgstr "репозиторий недоступен, поставили из кеша"
+
+msgid "resetting the device"
+msgstr "сброс устройства"
+
+msgid "resetting the device to factory settings"
+msgstr "сбрасываем устройство к заводским настройкам"
+
+msgid "securing the control channel"
+msgstr "защищаем канал управления"
+
+msgid "service key was not installed, password login left enabled"
+msgstr "служебный ключ не установлен, вход по паролю оставлен"
+
+msgid "service key works, password login disabled"
+msgstr "ключ работает, вход по паролю отключён"
+
+msgid "switching to the controller subnet"
+msgstr "переводим в подсеть контроллера"
+
+msgid "the device did not accept the reset — reset it manually"
+msgstr "устройство не приняло команду сброса — сбросьте его вручную"
+
+msgid "the device is not in the system"
+msgstr "устройства нет в системе"
+
+msgid "the device is resetting to factory settings"
+msgstr "устройство сбрасывается к заводским настройкам"
+
+msgid "the device still answers — the reset may have failed"
+msgstr "устройство всё ещё отвечает — сброс мог не выполниться"
+
+msgid "the network is on air on %s radio(s)"
+msgstr "сеть в эфире на %s радио"
+
+msgid "the node is part of the system"
+msgstr "узел в системе"
+
+msgid "waiting for the network to go on air"
+msgstr "ждём выхода сети в эфир"
+
+msgid "Connect a LAN port of the controller to a LAN port of the new device — not to its WAN port."
+msgstr "Соедините LAN-порт контроллера с LAN-портом нового устройства — не с его WAN-портом."
+
+msgid "Finished."
+msgstr "Завершено."
+
+msgid "Not finished."
+msgstr "Не завершено."
+
+msgid "Then press \"Add a new node\" and capture the device that appears."
+msgstr "Затем нажмите «Добавить новый узел» и захватите появившееся устройство."
+
+msgid "To add a node: reset the new device to factory settings and make sure it has no administrator password."
+msgstr "Чтобы добавить узел: сбросьте новое устройство к заводским настройкам и убедитесь, что на нём нет пароля администратора."
+
+msgid "roamd for OpenWrt %s"
+msgstr "roamd для OpenWrt %s"
+
+msgid "the node is up to date"
+msgstr "узел обновлён"
+
+msgid "updating packages"
+msgstr "обновление пакетов"
+
+msgid "the device is released"
+msgstr "устройство освобождено"
+
+msgid "The operation is running, it takes a few minutes. You can close this window — the process continues."
+msgstr "Операция выполняется, это занимает несколько минут. Окно можно закрыть — процесс продолжится."
+
+msgid "A node is being removed now"
+msgstr "Сейчас идёт удаление узла"
+
+msgid "no roamd package for OpenWrt %s (%s) — build it and put it in the repository"
+msgstr "нет пакета roamd для OpenWrt %s (%s) — соберите его и положите в репозиторий"

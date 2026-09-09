@@ -1,0 +1,397 @@
+DIAG_LOG="/tmp/roamd-diag.log"
+DIAG_LOG_LINES=200
+
+diag_log() {
+	local n
+
+	printf '%s %s\n' "$(date '+%H:%M:%S')" "$1" >> "$DIAG_LOG"
+
+	n=$(wc -l < "$DIAG_LOG" 2>/dev/null) || return 0
+	[ "$n" -gt $((DIAG_LOG_LINES * 2)) ] || return 0
+
+	tail -n "$DIAG_LOG_LINES" "$DIAG_LOG" > "$DIAG_LOG.tmp" 2>/dev/null &&
+		mv "$DIAG_LOG.tmp" "$DIAG_LOG"
+}
+
+ACQUIRE_DIR="/var/run/roamd/acquire"
+ACQUIRE_KEEP=5
+
+acquire_dir_trim() {
+	mkdir -p "$ACQUIRE_DIR"
+	ls -t "$ACQUIRE_DIR" 2>/dev/null | grep -v '\.mac$' | tail -n +$((ACQUIRE_KEEP + 1)) | while read -r old; do
+		rm -f "$ACQUIRE_DIR/$old" "$ACQUIRE_DIR/$old.mac"
+	done
+}
+
+SSH_OPTS="-o StrictHostKeyChecking=no -y -y"
+SCP_OPTS="-o StrictHostKeyChecking=no"
+
+node_forget() {
+	[ -f /root/.ssh/known_hosts ] || return 0
+	sed -i "/^$1 /d;/^\[$1\]/d" /root/.ssh/known_hosts 2>/dev/null
+}
+SSH_USER="root"
+SSH_KEY="/etc/roamd/id"
+
+ssh_key_opt() {
+	[ -f "$SSH_KEY" ] && echo "-i $SSH_KEY"
+}
+
+ensure_ssh_key() {
+	[ -f "$SSH_KEY" ] && return 0
+	mkdir -p /etc/roamd
+	dropbearkey -t rsa -s 2048 -f "$SSH_KEY" >/dev/null 2>&1
+	chmod 600 "$SSH_KEY"
+}
+
+ssh_pubkey() {
+	dropbearkey -y -f "$SSH_KEY" 2>/dev/null | grep '^ssh-'
+}
+
+run_bounded() {
+	local limit="$1"; shift
+	"$@" &
+	local pid=$!
+	local waited=0
+
+	while kill -0 "$pid" 2>/dev/null; do
+		[ "$waited" -ge "$limit" ] && {
+			kill "$pid" 2>/dev/null
+			sleep 2
+			kill -9 "$pid" 2>/dev/null
+			wait "$pid" 2>/dev/null
+			return 124
+		}
+		sleep 1
+		waited=$((waited + 1))
+	done
+
+	wait "$pid"
+}
+
+node_ssh() {
+	local addr="$1"; shift
+	run_bounded 8 ssh $SSH_OPTS $(ssh_key_opt) "${SSH_USER}@${addr}" "$@"
+}
+
+node_ssh_long() {
+	local addr="$1"; shift
+	run_bounded 300 ssh $SSH_OPTS $(ssh_key_opt) "${SSH_USER}@${addr}" "$@"
+}
+
+addr_is_v6() {
+	case "$1" in *:*) return 0;; esac
+
+	return 1
+}
+
+scp_host() {
+	addr_is_v6 "$1" && { echo "[$1]"; return 0; }
+	echo "$1"
+}
+
+node_scp() {
+	local src="$1" addr="$2" dst="$3"
+	run_bounded 60 scp $SCP_OPTS $(ssh_key_opt) "$src" "${SSH_USER}@$(scp_host "$addr"):${dst}"
+}
+
+node_scp_from() {
+	local addr="$1" src="$2" dst="$3"
+
+	run_bounded 60 ssh $SSH_OPTS $(ssh_key_opt) "${SSH_USER}@${addr}" "cat '$src'" > "$dst" 2>/dev/null || {
+		rm -f "$dst"
+		return 1
+	}
+
+	[ -s "$dst" ] || {
+		rm -f "$dst"
+		return 1
+	}
+}
+
+PKG_DIR="/usr/libexec/roamd/pkg"
+
+node_arch() {
+	node_ssh "$1" '. /etc/openwrt_release 2>/dev/null; echo "$DISTRIB_ARCH"' 2>/dev/null | tr -d '\r\n '
+}
+
+node_pkgmgr() {
+	node_ssh "$1" 'command -v apk >/dev/null && echo apk || { command -v opkg >/dev/null && echo opkg; }' 2>/dev/null | tr -d '\r\n '
+}
+
+PKG_MAIN="roamd"
+PKG_UI="luci-app-roamd luci-i18n-roamd-ru"
+
+pkg_local() {
+	local name="${3:-$PKG_MAIN}"
+	ls "$PKG_DIR/$1/$2/$name"-[0-9]*.apk "$PKG_DIR/$1/$2/${name}_"*.ipk 2>/dev/null | head -1
+}
+
+PKG_CERT="/etc/roamd/pkg.crt"
+
+pkg_url() {
+	local url
+	url=$(uci -q get roamd.mesh.pkg_url)
+	[ -n "$url" ] || return 1
+
+	case "$url" in
+		https://*) ;;
+		*) return 3 ;;
+	esac
+
+	echo "$url"
+}
+
+feed_url() {
+	local url branch="$1" arch="$2"
+
+	url=$(pkg_url) || return $?
+
+	case "$url" in
+		*%b*|*%a*) echo "$url" | sed "s|%b|$branch|g; s|%a|$arch|g" ;;
+		*) echo "$url/$branch/$arch" ;;
+	esac
+}
+
+pkg_get() {
+	if [ -f "$PKG_CERT" ]; then
+		curl -sL --max-time 20 --cacert "$PKG_CERT" "$1" -o "${2:--}"
+	else
+		curl -sL --max-time 20 "$1" -o "${2:--}"
+	fi
+}
+
+pkg_index_meta() {
+	local url index name="${3:-$PKG_MAIN}"
+
+	url=$(feed_url "$1" "$2") || return 1
+
+	index=$(pkg_get "$url/Packages")
+	[ -n "$index" ] || return 1
+
+	printf '%s\n' "$index" | awk -v want="Package: $name" '
+		$0 == want { in_pkg = 1 }
+		/^$/ { in_pkg = 0 }
+		in_pkg && /^Version:/ { version = $2 }
+		in_pkg && /^Filename:/ { name = $2 }
+		in_pkg && /^SHA256sum:/ { sum = $2 }
+		END { if (name != "" && sum != "") print name, sum, version }'
+}
+
+pkg_version() {
+	local meta file name="${3:-$PKG_MAIN}"
+
+	meta=$(pkg_index_meta "$1" "$2" "$name")
+	if [ -n "$meta" ]; then
+		echo "${meta##* }"
+		return 0
+	fi
+
+	file=$(pkg_local "$1" "$2" "$name")
+	[ -n "$file" ] || return 1
+
+	case "$file" in
+		*.apk) basename "$file" .apk | sed -n "s/^$name-\\(.*\\)$/\\1/p" ;;
+		*) basename "$file" | sed -n "s/^${name}_\\([^_]*\\)_.*/\\1/p" ;;
+	esac
+}
+
+pkg_fetch() {
+	local branch="$1" arch="$2" meta name sum path
+
+	meta=$(pkg_index_meta "$branch" "$arch" "${3:-$PKG_MAIN}")
+	[ -n "$meta" ] || return 1
+
+	name=${meta%% *}
+	sum=$(echo "$meta" | cut -d' ' -f2)
+
+	path="$PKG_DIR/$branch/$arch/$name"
+	mkdir -p "$PKG_DIR/$branch/$arch"
+
+	if ! echo "$sum  $path" | sha256sum -c >/dev/null 2>&1; then
+		pkg_get "$(feed_url "$branch" "$arch")/$name" "$path" || { rm -f "$path"; return 1; }
+		echo "$sum  $path" | sha256sum -c >/dev/null 2>&1 || { rm -f "$path"; return 1; }
+	fi
+
+	echo "$path"
+}
+
+node_has_luci() {
+	node_ssh "$1" '[ -d /www/luci-static/resources ]' >/dev/null 2>&1
+}
+
+pkg_push() {
+	local addr="$1" pkg="$2" mgr="$3" opt="$4"
+	local file sum cmd rc waited=0
+
+	file=$(basename "$pkg")
+	sum=$(sha256sum "$pkg" | cut -d' ' -f1)
+
+	case "$mgr" in
+		apk) cmd="apk add --allow-untrusted --repositories-file /dev/null '/tmp/$file'" ;;
+		opkg) cmd="opkg install $opt '/tmp/$file'" ;;
+		*) return 1 ;;
+	esac
+
+	node_scp "$pkg" "$addr" "/tmp/$file" || return 1
+	node_ssh "$addr" "
+		echo '$sum  /tmp/$file' | sha256sum -c >/dev/null 2>&1 || { rm -f '/tmp/$file'; exit 1; }
+		rm -f /tmp/roamd-pkg.rc
+		cat > /tmp/roamd-pkg.sh <<'EOS'
+#!/bin/sh
+$cmd </dev/null >>/tmp/roamd-install.log 2>&1
+echo \$? > /tmp/roamd-pkg.rc
+rm -f '/tmp/$file'
+ubus call service delete '{\"name\":\"roamd-pkg\"}'
+EOS
+		ubus call service add \"{\\\"name\\\":\\\"roamd-pkg\\\",\\\"instances\\\":{\\\"main\\\":{\\\"command\\\":[\\\"/bin/sh\\\",\\\"/tmp/roamd-pkg.sh\\\"]}}}\"
+	" || return 1
+
+	while [ "$waited" -lt 240 ]; do
+		sleep 5
+		waited=$((waited + 5))
+		rc=$(node_ssh "$addr" 'cat /tmp/roamd-pkg.rc 2>/dev/null' | tr -d '\r\n ')
+		[ -n "$rc" ] && {
+			node_ssh "$addr" "rm -f '/tmp/$file' /tmp/roamd-pkg.sh /tmp/roamd-pkg.rc" >/dev/null 2>&1
+			return "$rc"
+		}
+	done
+
+	return 1
+}
+
+install_roamd_pkg() {
+	local addr="$1" branch="$2" force="$3"
+	local arch mgr names name pkg repo cached="" opt=""
+	[ "$force" = "force" ] && opt="--force-reinstall"
+
+	arch=$(node_arch "$addr")
+	[ -n "$arch" ] || return 1
+
+	pkg_url >/dev/null
+	case $? in
+		0) repo=1 ;;
+		1) repo="" ;;
+		*) return 3 ;;
+	esac
+
+	mgr=$(node_pkgmgr "$addr")
+	node_ssh "$addr" ': > /tmp/roamd-install.log' >/dev/null 2>&1
+
+	names="$PKG_MAIN"
+	node_has_luci "$addr" && names="$names $PKG_UI"
+
+	for name in $names; do
+		pkg=""
+		[ -n "$repo" ] && pkg=$(pkg_fetch "$branch" "$arch" "$name")
+
+		if [ -z "$pkg" ]; then
+			pkg=$(pkg_local "$branch" "$arch" "$name")
+			[ -n "$pkg" ] && [ "$name" = "$PKG_MAIN" ] && cached=1
+		fi
+
+		if [ -n "$pkg" ]; then
+			pkg_push "$addr" "$pkg" "$mgr" "$opt" && continue
+			[ "$name" = "$PKG_MAIN" ] && return 1
+			continue
+		fi
+
+		[ "$name" = "$PKG_MAIN" ] || continue
+
+		case "$mgr" in
+			apk) node_ssh_long "$addr" 'apk update >/dev/null 2>&1 && apk add roamd >/dev/null 2>&1' || return 2 ;;
+			opkg) node_ssh_long "$addr" 'opkg update >/dev/null 2>&1 && opkg install roamd >/dev/null 2>&1' || return 2 ;;
+			*) return 1 ;;
+		esac
+	done
+
+	for try in 1 2 3 4 5; do
+		node_ssh "$addr" 'command -v roamd >/dev/null' && break
+		[ "$try" = 5 ] && return 1
+		sleep 5
+	done
+
+	[ -n "$cached" ] && return 4
+	return 0
+}
+
+lan_subnets() {
+	ip -4 -o addr show scope global | while read -r _ dev _ cidr _; do
+		case "$dev" in lo|*:*) continue;; esac
+		local prefix="${cidr#*/}"
+		[ "$prefix" -ge 24 ] || continue
+		case "$cidr" in
+			10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "$cidr";;
+		esac
+	done | sort -u
+}
+
+subnet_base() { echo "${1%.*/*}"; }
+
+warm_subnet() {
+	local base="$1" i
+	for i in $(seq 1 254); do
+		ping -c1 -W1 "${base}.${i}" >/dev/null 2>&1 &
+	done
+	wait
+}
+
+node_addr_by_mac() {
+	local mac="$1" sub
+
+	for sub in $(lan_subnets); do
+		warm_subnet "$(subnet_base "$sub")"
+	done
+
+	ip neigh show | awk -v m="$mac" '$4 == "lladdr" && tolower($5) == tolower(m) { print $1; exit }'
+}
+
+node_wait_by_mac() {
+	local mac="$1" limit="${2:-120}" waited=0 addr
+
+	while [ "$waited" -lt "$limit" ]; do
+		addr=$(node_addr_by_mac "$mac")
+		if [ -n "$addr" ] && node_ssh "$addr" true >/dev/null 2>&1; then
+			echo "$addr"
+			return 0
+		fi
+		sleep 5
+		waited=$((waited + 5))
+	done
+
+	return 1
+}
+
+own_addrs() {
+	ip -4 -o addr show scope global | while read -r _ _ _ cidr _; do echo "${cidr%/*}"; done
+}
+
+lan_devices() {
+	ip -4 -o addr show scope global | while read -r _ dev _ cidr _; do
+		case "$dev" in lo|*:*) continue;; esac
+		case "$cidr" in
+			10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "$dev";;
+		esac
+	done | sort -u
+}
+
+warm_v6() {
+	local dev
+
+	for dev in $(lan_devices); do
+		ping6 -c 2 -w 2 "ff02::1%$dev" >/dev/null 2>&1
+	done
+}
+
+ll_neighbours() {
+	local self
+
+	warm_v6
+	self=$(ip -6 -o addr show scope link 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 | tr '\n' ' ')
+
+	ip -6 neigh show 2>/dev/null | awk -v self="$self" '
+		$1 ~ /^fe80:/ && /lladdr/ {
+			if (index(self, $1) == 0)
+				print $1 "%" $3
+		}' | sort -u
+}

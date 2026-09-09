@@ -1,0 +1,15 @@
+{
+	"roamd": {
+		"description": "roamd mesh control channel",
+		"read": {
+			"ubus": {
+				"roamd": [ "status", "mesh_status", "mesh_role", "mesh_report", "mesh_diag" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"roamd": [ "reload", "mesh_apply", "mesh_steer", "mesh_neighbors" ]
+			}
+		}
+	}
+}

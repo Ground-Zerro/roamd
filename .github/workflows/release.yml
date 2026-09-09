@@ -1,0 +1,114 @@
+name: Build and publish packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      branches:
+        description: 'Ветки OpenWrt через пробел (по умолчанию все)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  matrix:
+    name: Build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      jobs: ${{ steps.build.outputs.jobs }}
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: build
+        run: |
+          wanted="${{ github.event.inputs.branches }}"
+          [ -n "$wanted" ] || wanted=$(awk '{ print $1 }' targets/branches.txt)
+
+          {
+            printf 'jobs='
+            {
+              for branch in $wanted; do
+                release=$(awk -v b="$branch" '$1 == b { print $2 }' targets/branches.txt)
+                [ -n "$release" ] || { echo "неизвестная ветка $branch" >&2; exit 1; }
+                awk -v b="$branch" -v r="$release" '{ printf "{\"branch\":\"%s\",\"release\":\"%s\",\"arch\":\"%s\"}\n", b, r, $1 }' "targets/$branch.txt"
+              done
+            } | paste -sd, - | sed 's/^/[/; s/$/]/'
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="1.0.0-rc1"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.branch }} ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    needs: matrix
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.jobs) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3-setuptools rsync swig \
+            unzip zlib1g-dev file wget zstd
+
+      - name: Cache OpenWrt feeds
+        uses: actions/cache@v4
+        with:
+          path: build/feeds-cache-${{ matrix.release }}
+          key: feeds-${{ matrix.release }}
+
+      - name: Build packages
+        run: RELEASE=${{ matrix.release }} ./build.sh ${{ matrix.arch }}
+
+      - name: Prepare signing keys
+        env:
+          USIGN_SECRET: ${{ secrets.USIGN_SECRET }}
+          APK_SIGN_KEY: ${{ secrets.APK_SIGN_KEY }}
+        run: |
+          mkdir -p /tmp/keys
+          [ -n "$USIGN_SECRET" ] && printf '%s\n' "$USIGN_SECRET" > /tmp/keys/roamd.sec
+          [ -n "$APK_SIGN_KEY" ] && printf '%s\n' "$APK_SIGN_KEY" > /tmp/keys/roamd.pem
+          chmod 600 /tmp/keys/* 2>/dev/null || true
+
+      - name: Build repository index
+        run: ./repo.sh index-feed ${{ matrix.branch }} ${{ matrix.arch }} /tmp/keys
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feed-${{ matrix.branch }}-${{ matrix.arch }}
+          path: dist/${{ matrix.branch }}/${{ matrix.arch }}/*
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [matrix, build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: feeds
+          pattern: feed-*
+
+      - name: Publish per-feed releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./repo.sh publish feeds ${{ needs.matrix.outputs.version }}

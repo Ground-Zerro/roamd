@@ -1,0 +1,18 @@
+{
+	"luci-app-roamd": {
+		"description": "Grant access to the Wi-Fi roaming configuration",
+		"read": {
+			"ubus": {
+				"roamd": [ "status", "mesh_status", "mesh_clients", "mesh_role", "mesh_discover", "mesh_acquire_status", "mesh_log" ],
+				"luci-rpc": [ "getHostHints" ]
+			},
+			"uci": [ "roamd" ]
+		},
+		"write": {
+			"ubus": {
+				"roamd": [ "reload", "mesh_acquire", "mesh_member_remove", "mesh_member_update", "mesh_client_update", "mesh_client_forget", "mesh_self_check", "mesh_update", "mesh_settings" ]
+			},
+			"uci": [ "roamd" ]
+		}
+	}
+}
