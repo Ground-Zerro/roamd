@@ -15,6 +15,8 @@
 #define MESH_ADDR_MAX		64
 #define MESH_MAC_MAX		18
 #define MESH_URL_MAX		192
+#define MESH_WORD_MAX		12
+#define MESH_PKG_URL_DEFAULT	"https://github.com/Ground-Zerro/roamd/releases/download/feed-%b-%a"
 
 enum mesh_role {
 	MESH_CONTROLLER,
@@ -64,6 +66,10 @@ struct mesh_config {
 	char ft_key[33];
 	bool wifi_shutdown;
 	bool auto_update;
+	uint32_t auto_update_every;
+	char auto_update_unit[MESH_WORD_MAX];
+	uint32_t auto_update_last;
+	char auto_update_result[MESH_WORD_MAX];
 	char pkg_url[MESH_URL_MAX];
 
 	char controller_id[MESH_ID_MAX];
@@ -153,6 +159,7 @@ void mesh_ctrl_self_update(struct blob_buf *b);
 void mesh_ctrl_release(const char *id, struct blob_buf *b);
 void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b);
 void mesh_ctrl_poll_start(void);
+void mesh_ctrl_autoupdate_arm(void);
 void mesh_ctrl_sync(void);
 void mesh_uci_set(struct uci_context *ctx, const char *pkg, const char *sect,
 		  const char *opt, const char *val);
@@ -172,6 +179,7 @@ bool mesh_node_steer(const char *macstr, struct blob_attr *neighbors);
 void mesh_node_touch(void);
 uint32_t mesh_node_contact_age(void);
 void mesh_node_watch_start(void);
+void mesh_node_dumbap(void);
 
 void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band,
 		    enum mesh_event_type type);

@@ -234,7 +234,12 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_string(&b, "backhaul_key", mesh.backhaul_key);
 		blobmsg_add_u8(&b, "wifi_shutdown", mesh.wifi_shutdown);
 		blobmsg_add_u8(&b, "auto_update", mesh.auto_update);
+		blobmsg_add_u32(&b, "auto_update_every", mesh.auto_update_every);
+		blobmsg_add_string(&b, "auto_update_unit", mesh.auto_update_unit);
+		blobmsg_add_u32(&b, "auto_update_last", mesh.auto_update_last);
+		blobmsg_add_string(&b, "auto_update_result", mesh.auto_update_result);
 		blobmsg_add_string(&b, "pkg_url", mesh.pkg_url);
+		blobmsg_add_string(&b, "pkg_url_default", MESH_PKG_URL_DEFAULT);
 		mesh_ctrl_acquire_blob(&b);
 
 		members = blobmsg_open_array(&b, "members");
@@ -372,6 +377,8 @@ enum {
 	SET_BH_KEY,
 	SET_WIFI_SHUTDOWN,
 	SET_AUTO_UPDATE,
+	SET_AUTO_EVERY,
+	SET_AUTO_UNIT,
 	SET_PKG_URL,
 	SET_NAME,
 	__SET_MAX
@@ -383,6 +390,8 @@ static const struct blobmsg_policy settings_policy[__SET_MAX] = {
 	[SET_BH_KEY] = { .name = "backhaul_key", .type = BLOBMSG_TYPE_STRING },
 	[SET_WIFI_SHUTDOWN] = { .name = "wifi_shutdown", .type = BLOBMSG_TYPE_STRING },
 	[SET_AUTO_UPDATE] = { .name = "auto_update", .type = BLOBMSG_TYPE_STRING },
+	[SET_AUTO_EVERY] = { .name = "auto_update_every", .type = BLOBMSG_TYPE_STRING },
+	[SET_AUTO_UNIT] = { .name = "auto_update_unit", .type = BLOBMSG_TYPE_STRING },
 	[SET_PKG_URL] = { .name = "pkg_url", .type = BLOBMSG_TYPE_STRING },
 	[SET_NAME] = { .name = "controller_name", .type = BLOBMSG_TYPE_STRING },
 };
@@ -393,7 +402,8 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 {
 	static const char *const opts[__SET_MAX] = {
 		"backhaul_enabled", "backhaul_ssid", "backhaul_key",
-		"wifi_shutdown", "auto_update", "pkg_url", "controller_name"
+		"wifi_shutdown", "auto_update", "auto_update_every",
+		"auto_update_unit", "pkg_url", "controller_name"
 	};
 	struct blob_attr *tb[__SET_MAX];
 	struct uci_context *uci;
@@ -432,6 +442,7 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 
 	roam_config_load();
 	mesh_ctrl_backhaul_apply();
+	mesh_ctrl_autoupdate_arm();
 
 	return 0;
 }

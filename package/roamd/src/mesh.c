@@ -117,6 +117,7 @@ struct list_head mesh_members = LIST_HEAD_INIT(mesh_members);
 enum mesh_field_type {
 	MESH_BOOL,
 	MESH_ROLE,
+	MESH_U32,
 	MESH_STR
 };
 
@@ -139,6 +140,10 @@ static const struct mesh_field fields[] = {
 	MFIELD("ft_key", MESH_STR, ft_key),
 	MFIELD("wifi_shutdown", MESH_BOOL, wifi_shutdown),
 	MFIELD("auto_update", MESH_BOOL, auto_update),
+	MFIELD("auto_update_every", MESH_U32, auto_update_every),
+	MFIELD("auto_update_unit", MESH_STR, auto_update_unit),
+	MFIELD("auto_update_last", MESH_U32, auto_update_last),
+	MFIELD("auto_update_result", MESH_STR, auto_update_result),
 	MFIELD("pkg_url", MESH_STR, pkg_url),
 	MFIELD("controller_id", MESH_STR, controller_id),
 	MFIELD("controller_name", MESH_STR, controller_name),
@@ -548,6 +553,9 @@ void mesh_config_init(void)
 	mesh.enabled = true;
 	mesh.role = MESH_CONTROLLER;
 	mesh.backhaul_enabled = true;
+	mesh.auto_update_every = 1;
+	strcpy(mesh.auto_update_unit, "day");
+	strcpy(mesh.pkg_url, MESH_PKG_URL_DEFAULT);
 
 	mesh_members_clear();
 }
@@ -592,6 +600,9 @@ static void field_apply(const struct mesh_field *f, const char *value)
 	case MESH_ROLE:
 		*(enum mesh_role *)p = strcmp(value, "node") ? MESH_CONTROLLER : MESH_NODE;
 		break;
+	case MESH_U32:
+		*(uint32_t *)p = strtoul(value, NULL, 10);
+		break;
 	case MESH_STR:
 		strncpy(p, value, f->size - 1);
 		((char *)p)[f->size - 1] = '\0';
@@ -609,6 +620,9 @@ void mesh_config_apply(struct uci_context *ctx, struct uci_section *s)
 		if (v)
 			field_apply(&fields[i], v);
 	}
+
+	if (!mesh.pkg_url[0])
+		snprintf(mesh.pkg_url, sizeof(mesh.pkg_url), "%s", MESH_PKG_URL_DEFAULT);
 }
 
 void mesh_uci_set(struct uci_context *ctx, const char *pkg, const char *sect,
@@ -643,12 +657,14 @@ void mesh_start(void)
 			 mesh.controller_id[0] ? mesh.controller_id : "?",
 			 mesh.controller_addr[0] ? mesh.controller_addr : "?");
 		mesh_node_watch_start();
+		mesh_node_dumbap();
 	} else {
 		mesh_ctrl_ensure_id();
 		roam_log(ROAM_L_INFO, "mesh: controller %s", mesh.controller_id);
 		mesh_ctrl_backhaul_apply();
 		mesh_ctrl_bridge_stp();
 		mesh_ctrl_poll_start();
+		mesh_ctrl_autoupdate_arm();
 		mesh_ctrl_sync();
 	}
 }

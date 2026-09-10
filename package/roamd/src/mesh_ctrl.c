@@ -21,18 +21,24 @@
 #define MESH_UPDATE	"/usr/libexec/roamd/mesh-update.sh"
 #define MESH_SELFUPDATE	"/usr/libexec/roamd/mesh-selfupdate.sh"
 #define MESH_POLL	"/usr/libexec/roamd/mesh-poll-all.sh"
+#define MESH_AUTOUPDATE	"/usr/libexec/roamd/mesh-autoupdate.sh"
 #define MESH_RELEASE	"/usr/libexec/roamd/mesh-release.sh"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
 #define ACQUIRE_DIR	"/var/run/roamd/acquire"
 #define MEMBERS_DIR	"/var/run/roamd/members"
 #define MESH_POLL_INTERVAL	15000
 #define TASK_STALE	180
+#define AUTOUPDATE_SETTLE	60000
+#define AUTOUPDATE_STEP		3600
+#define AUTOUPDATE_BUSY_RETRY	300000
+#define AUTOUPDATE_FAIL_RETRY	1800
 
 static struct uloop_process discover_proc;
 static struct uloop_process acquire_proc;
 static struct uloop_process poll_proc;
 static struct uloop_process sync_proc;
 static struct uloop_timeout poll_timer;
+static struct uloop_timeout autoupdate_timer;
 static bool discover_busy;
 static bool poll_busy;
 static bool sync_busy;
@@ -133,6 +139,7 @@ void mesh_ctrl_acquire_blob(struct blob_buf *b)
 static void acquire_done(struct uloop_process *p, int ret)
 {
 	roam_config_load();
+	mesh_ctrl_autoupdate_arm();
 }
 
 static struct mesh_member *member_by_id(const char *id)
@@ -152,10 +159,12 @@ static void acquire_start(const char *kind, const char *script, const char *arg,
 	pid_t pid;
 
 	if (acquire_busy()) {
-		blobmsg_add_string(b, "error", "busy");
-		blobmsg_add_string(b, "task_id", acquire_task);
-		if (acquire_addr[0])
-			blobmsg_add_string(b, "addr", acquire_addr);
+		if (b) {
+			blobmsg_add_string(b, "error", "busy");
+			blobmsg_add_string(b, "task_id", acquire_task);
+			if (acquire_addr[0])
+				blobmsg_add_string(b, "addr", acquire_addr);
+		}
 		return;
 	}
 
@@ -165,7 +174,8 @@ static void acquire_start(const char *kind, const char *script, const char *arg,
 
 	pid = mesh_spawn(script, arg ? arg : "", acquire_task);
 	if (pid <= 0) {
-		blobmsg_add_string(b, "error", "spawn_failed");
+		if (b)
+			blobmsg_add_string(b, "error", "spawn_failed");
 		return;
 	}
 
@@ -173,7 +183,8 @@ static void acquire_start(const char *kind, const char *script, const char *arg,
 	acquire_proc.cb = acquire_done;
 	uloop_process_add(&acquire_proc);
 
-	blobmsg_add_string(b, "task_id", acquire_task);
+	if (b)
+		blobmsg_add_string(b, "task_id", acquire_task);
 }
 
 void mesh_ctrl_acquire(const char *addr, struct blob_buf *b)
@@ -484,6 +495,81 @@ static void poll_cb(struct uloop_timeout *t)
 	}
 
 	uloop_timeout_set(&poll_timer, MESH_POLL_INTERVAL);
+}
+
+static const struct {
+	const char *unit;
+	uint32_t seconds;
+	uint32_t max;
+} autoupdate_units[] = {
+	{ "hour", 3600, 23 },
+	{ "day", 86400, 31 },
+	{ "week", 604800, 5 },
+	{ "month", 2592000, 12 },
+};
+
+static uint32_t autoupdate_interval(void)
+{
+	uint32_t every = mesh.auto_update_every ? mesh.auto_update_every : 1;
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(autoupdate_units); i++) {
+		if (strcmp(autoupdate_units[i].unit, mesh.auto_update_unit))
+			continue;
+
+		if (every > autoupdate_units[i].max)
+			every = autoupdate_units[i].max;
+
+		return every * autoupdate_units[i].seconds;
+	}
+
+	return autoupdate_units[1].seconds;
+}
+
+static uint32_t autoupdate_due(uint32_t now)
+{
+	uint32_t interval = autoupdate_interval();
+	uint32_t wait = interval;
+
+	if (!mesh.auto_update_last || mesh.auto_update_last > now)
+		return now;
+
+	if (!strcmp(mesh.auto_update_result, "error") && wait > AUTOUPDATE_FAIL_RETRY)
+		wait = AUTOUPDATE_FAIL_RETRY;
+
+	return mesh.auto_update_last + wait;
+}
+
+static void autoupdate_cb(struct uloop_timeout *t)
+{
+	uint32_t now = (uint32_t)time(NULL);
+	uint32_t due = autoupdate_due(now);
+
+	if (now < due) {
+		uint32_t left = due - now;
+
+		uloop_timeout_set(t, (int)(left > AUTOUPDATE_STEP ? AUTOUPDATE_STEP : left) * 1000);
+		return;
+	}
+
+	if (acquire_busy()) {
+		uloop_timeout_set(t, AUTOUPDATE_BUSY_RETRY);
+		return;
+	}
+
+	acquire_start("autoupdate", MESH_AUTOUPDATE, NULL, NULL, NULL);
+	uloop_timeout_set(t, AUTOUPDATE_STEP * 1000);
+}
+
+void mesh_ctrl_autoupdate_arm(void)
+{
+	uloop_timeout_cancel(&autoupdate_timer);
+
+	if (mesh.role != MESH_CONTROLLER || !mesh.enabled || !mesh.auto_update)
+		return;
+
+	autoupdate_timer.cb = autoupdate_cb;
+	uloop_timeout_set(&autoupdate_timer, AUTOUPDATE_SETTLE);
 }
 
 static void sync_done(struct uloop_process *p, int ret)

@@ -23,12 +23,18 @@ for o in ssid encryption key; do
 done
 json_close_object
 
+json_add_object system
+for o in timezone zonename; do
+	v=$(uci -q get "system.@system[0].$o")
+	[ -n "$v" ] && json_add_string "$o" "$v"
+done
+json_close_object
+
 json_add_object credentials
-rh=$(sed -n 's/^root:\([^:]*\):.*/\1/p' /etc/shadow 2>/dev/null)
-case "$rh" in
-	""|"*"|"!"|"!!"|"x") ;;
-	*) json_add_string root_hash "$rh" ;;
-esac
+if grep -q '^root:' /etc/shadow 2>/dev/null; then
+	rh=$(sed -n 's/^root:\([^:]*\):.*/\1/p' /etc/shadow)
+	[ "$rh" = "x" ] || json_add_string root_hash "$rh"
+fi
 json_close_object
 
 json_add_object global

@@ -578,8 +578,8 @@ msgstr "не в сети"
 msgid "online"
 msgstr "в сети"
 
-msgid "roamd is updated automatically on all nodes when a newer package is available."
-msgstr "roamd обновляется автоматически на всех узлах при появлении более новой версии пакета."
+msgid "roamd is updated automatically on the controller and on all nodes when a newer package is available."
+msgstr "roamd автоматически обновляется на контроллере и всех узлах при появлении более новой версии пакета."
 
 msgid "roaming"
 msgstr "роуминг"
@@ -651,8 +651,8 @@ msgstr "Переименование узла"
 msgid "Package repository"
 msgstr "Репозиторий пакетов"
 
-msgid "Where the controller takes roamd packages for the nodes. Only https:// is accepted, and the repository certificate must be placed in /etc/roamd/pkg.crt — the delivery installs software on every node."
-msgstr "Откуда контроллер берёт пакеты roamd для узлов. Принимается только https://, а сертификат репозитория должен лежать в /etc/roamd/pkg.crt — доставка устанавливает программы на каждый узел."
+msgid "Leave empty to use the project repository. Fill it in only for your own repository: only https:// is accepted, and its certificate must be placed in /etc/roamd/pkg.crt — the delivery installs software on every node."
+msgstr "Пусто — используется репозиторий проекта. Заполняйте только для своего репозитория: принимается лишь https://, а его сертификат должен лежать в /etc/roamd/pkg.crt — доставка ставит программы на каждый узел."
 
 msgid "Broadcast on bands"
 msgstr "Вещается в диапазонах"
@@ -951,9 +951,6 @@ msgstr "Затем нажмите «Добавить новый узел» и з
 msgid "To add a node: reset the new device to factory settings and make sure it has no administrator password."
 msgstr "Чтобы добавить узел: сбросьте новое устройство к заводским настройкам и убедитесь, что на нём нет пароля администратора."
 
-msgid "roamd for OpenWrt %s"
-msgstr "roamd для OpenWrt %s"
-
 msgid "the node is up to date"
 msgstr "узел обновлён"
 
@@ -995,3 +992,75 @@ msgstr "список пакетов недоступен"
 
 msgid "the packages could not be installed"
 msgstr "не удалось установить пакеты"
+
+msgid "Check for updates every"
+msgstr "Проверять обновления каждые"
+
+msgid "The controller checks the repository on this schedule and installs the update itself — first on the controller, then on the nodes."
+msgstr "С этой периодичностью контроллер опрашивает репозиторий и ставит обновление сам — сначала на себя, затем на узлы."
+
+msgid "Last check"
+msgstr "Последняя проверка"
+
+msgid "not performed yet"
+msgstr "ещё не выполнялась"
+
+msgid "hours"
+msgstr "часов"
+
+msgid "days"
+msgstr "дней"
+
+msgid "weeks"
+msgstr "недель"
+
+msgid "months"
+msgstr "месяцев"
+
+msgid "updated"
+msgstr "обновлено"
+
+msgid "no updates"
+msgstr "обновлений нет"
+
+msgid "the check failed"
+msgstr "проверка не удалась"
+
+msgid "checking for updates"
+msgstr "проверка обновлений"
+
+msgid "An automatic update is running now"
+msgstr "Сейчас идёт автоматическое обновление"
+
+msgid "asking the repository"
+msgstr "опрос репозитория"
+
+msgid "installing roamd on the node"
+msgstr "установка roamd на узел"
+
+msgid "the controller is updated"
+msgstr "контроллер обновлён"
+
+msgid "the update is installed"
+msgstr "обновление установлено"
+
+msgid "some nodes were not updated"
+msgstr "часть узлов не обновилась"
+
+msgid "the node is unreachable"
+msgstr "узел недоступен"
+
+msgid "unknown OpenWrt version"
+msgstr "неизвестная версия OpenWrt"
+
+msgid "no package for the OpenWrt version of the node"
+msgstr "нет пакета для версии OpenWrt узла"
+
+msgid "the package could not be installed on the node"
+msgstr "пакет не установился на узле"
+
+msgid "the package source is not trusted: the repository must be https and its certificate must be in /etc/roamd/pkg.crt"
+msgstr "источник пакетов не доверенный: репозиторий должен быть https, а его сертификат — лежать в /etc/roamd/pkg.crt"
+
+msgid "Open the node web interface"
+msgstr "Открыть веб-интерфейс узла"

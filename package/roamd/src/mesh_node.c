@@ -15,8 +15,11 @@
 #define MESH_WATCH_INTERVAL	10000
 #define MESH_BH_STA		"mesh_bh_sta"
 #define MESH_BH_BAND_TIMEOUT	45000
+#define MESH_DUMBAP		"/usr/libexec/roamd/mesh-dumbap.sh"
 
 static struct uloop_timeout watch_timer;
+static struct uloop_process dumbap_proc;
+static bool dumbap_busy;
 static uint64_t last_contact;
 static bool contact_seen;
 static uint64_t bh_since;
@@ -24,6 +27,28 @@ static bool aps_down;
 static bool aps_state_known;
 static bool bh_up;
 static int bh_band;
+
+static void dumbap_done(struct uloop_process *p, int ret)
+{
+	dumbap_busy = false;
+}
+
+void mesh_node_dumbap(void)
+{
+	pid_t pid;
+
+	if (dumbap_busy)
+		return;
+
+	pid = mesh_spawn(MESH_DUMBAP, NULL, NULL);
+	if (pid <= 0)
+		return;
+
+	dumbap_proc.pid = pid;
+	dumbap_proc.cb = dumbap_done;
+	uloop_process_add(&dumbap_proc);
+	dumbap_busy = true;
+}
 
 void mesh_node_touch(void)
 {
@@ -464,6 +489,7 @@ enum {
 	APPLY_BACKHAUL,
 	APPLY_DEVICES,
 	APPLY_WIFI,
+	APPLY_SYSTEM,
 	APPLY_CREDS,
 	__APPLY_MAX
 };
@@ -475,8 +501,74 @@ static const struct blobmsg_policy apply_policy[__APPLY_MAX] = {
 	[APPLY_BACKHAUL] = { .name = "backhaul", .type = BLOBMSG_TYPE_TABLE },
 	[APPLY_DEVICES] = { .name = "devices", .type = BLOBMSG_TYPE_ARRAY },
 	[APPLY_WIFI] = { .name = "wifi", .type = BLOBMSG_TYPE_TABLE },
+	[APPLY_SYSTEM] = { .name = "system", .type = BLOBMSG_TYPE_TABLE },
 	[APPLY_CREDS] = { .name = "credentials", .type = BLOBMSG_TYPE_TABLE },
 };
+
+enum { SYS_TIMEZONE, SYS_ZONENAME, __SYS_MAX };
+
+static const struct blobmsg_policy system_policy[__SYS_MAX] = {
+	[SYS_TIMEZONE] = { .name = "timezone", .type = BLOBMSG_TYPE_STRING },
+	[SYS_ZONENAME] = { .name = "zonename", .type = BLOBMSG_TYPE_STRING },
+};
+
+static void apply_system(struct blob_attr *sys)
+{
+	static const char *const names[] = { "timezone", "zonename" };
+	struct blob_attr *tb[__SYS_MAX];
+	struct uci_context *ctx;
+	struct uci_package *pkg = NULL;
+	struct uci_element *e;
+	bool changed = false;
+
+	if (!sys)
+		return;
+
+	blobmsg_parse(system_policy, __SYS_MAX, tb, blobmsg_data(sys), blobmsg_data_len(sys));
+
+	ctx = uci_alloc_context();
+	if (!ctx)
+		return;
+
+	if (uci_load(ctx, "system", &pkg) != UCI_OK) {
+		uci_free_context(ctx);
+		return;
+	}
+
+	uci_foreach_element(&pkg->sections, e) {
+		struct uci_section *s = uci_to_section(e);
+		size_t i;
+
+		if (strcmp(s->type, "system"))
+			continue;
+
+		for (i = 0; i < ARRAY_SIZE(names); i++) {
+			const char *cur = uci_lookup_option_string(ctx, s, names[i]);
+			const char *want;
+
+			if (!tb[i])
+				continue;
+
+			want = blobmsg_get_string(tb[i]);
+			if (cur && !strcmp(cur, want))
+				continue;
+
+			mesh_uci_set(ctx, "system", s->e.name, names[i], want);
+			changed = true;
+		}
+		break;
+	}
+
+	if (changed) {
+		uci_commit(ctx, &pkg, false);
+		if (system("/etc/init.d/system reload >/dev/null 2>&1"))
+			roam_log(ROAM_L_ERR, "mesh: time zone written, reload failed");
+		else
+			roam_log(ROAM_L_INFO, "mesh: time zone updated from the controller");
+	}
+
+	uci_free_context(ctx);
+}
 
 static bool apply_credentials(struct blob_attr *cred)
 {
@@ -721,7 +813,9 @@ bool mesh_node_apply(struct blob_attr *msg)
 			ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
 	}
 
+	apply_system(tb[APPLY_SYSTEM]);
 	apply_credentials(tb[APPLY_CREDS]);
+	mesh_node_dumbap();
 
 	mesh_node_touch();
 	roam_config_load();

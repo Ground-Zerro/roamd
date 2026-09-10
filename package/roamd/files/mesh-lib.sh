@@ -214,17 +214,24 @@ pkg_local() {
 
 PKG_CERT="/etc/roamd/pkg.crt"
 
-pkg_url() {
-	local url
-	url=$(uci -q get roamd.mesh.pkg_url)
-	[ -n "$url" ] || return 1
+PKG_URL_EFFECTIVE=""
 
-	case "$url" in
+pkg_url() {
+	if [ -z "$PKG_URL_EFFECTIVE" ]; then
+		PKG_URL_EFFECTIVE=$(uci -q get roamd.mesh.pkg_url)
+		[ -n "$PKG_URL_EFFECTIVE" ] ||
+			PKG_URL_EFFECTIVE=$(ubus -t 3 call roamd mesh_status 2>/dev/null |
+				jsonfilter -e '@.pkg_url')
+	fi
+
+	[ -n "$PKG_URL_EFFECTIVE" ] || return 1
+
+	case "$PKG_URL_EFFECTIVE" in
 		https://*) ;;
 		*) return 3 ;;
 	esac
 
-	echo "$url"
+	echo "$PKG_URL_EFFECTIVE"
 }
 
 feed_url() {
@@ -398,6 +405,113 @@ install_roamd_pkg() {
 
 	[ -n "$cached" ] && return 4
 	return 0
+}
+
+MEMBERS_DIR="/var/run/roamd/members"
+
+member_sections() {
+	uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'
+}
+
+member_id_by_addr() {
+	local sect
+
+	for sect in $(member_sections); do
+		[ "$(uci -q get "roamd.$sect.addr")" = "$1" ] || continue
+		uci -q get "roamd.$sect.id"
+		return
+	done
+}
+
+member_pkg_source() {
+	[ -n "$1" ] || return 0
+
+	mkdir -p "$MEMBERS_DIR"
+	printf '%s' "$2" > "$MEMBERS_DIR/$1.pkgsrc"
+}
+
+member_needs_update() {
+	[ "$(jsonfilter -e '@.update_available' < "$MEMBERS_DIR/$1.json" 2>/dev/null)" = "true" ]
+}
+
+NODE_UPDATE_UNREACHABLE=5
+NODE_UPDATE_NO_RELEASE=6
+
+node_update() {
+	local addr="$1" id="$2" board version branch rc
+
+	node_forget "$addr"
+
+	board=$(node_ssh "$addr" 'ubus call system board' 2>/dev/null)
+	[ -n "$board" ] || return "$NODE_UPDATE_UNREACHABLE"
+	json_load "$board" 2>/dev/null || return "$NODE_UPDATE_UNREACHABLE"
+	json_select release 2>/dev/null && json_get_var version version
+
+	branch="${version%.*}"
+	[ -n "$branch" ] || return "$NODE_UPDATE_NO_RELEASE"
+
+	install_roamd_pkg "$addr" "$branch" force
+	rc=$?
+
+	case $rc in
+		0) member_pkg_source "$id" repository ;;
+		4) member_pkg_source "$id" cache ;;
+		*) return $rc ;;
+	esac
+
+	node_ssh "$addr" '/etc/init.d/roamd restart >/dev/null 2>&1'
+
+	return $rc
+}
+
+node_update_step() {
+	case "$1" in
+		2|"$NODE_UPDATE_NO_RELEASE") echo compat ;;
+		"$NODE_UPDATE_UNREACHABLE") echo probe ;;
+		*) echo update ;;
+	esac
+}
+
+node_update_error() {
+	case "$1" in
+		2) echo "no package for the OpenWrt version of the node" ;;
+		3) echo "package source is not trusted: pkg_url must be https and /etc/roamd/pkg.crt must exist" ;;
+		"$NODE_UPDATE_UNREACHABLE") echo "node is unreachable" ;;
+		"$NODE_UPDATE_NO_RELEASE") echo "unknown OpenWrt version" ;;
+		*) echo "package installation failed on the node" ;;
+	esac
+}
+
+self_packages() {
+	local name names=""
+
+	for name in $PKG_MAIN $PKG_UI; do
+		sys_installed "$name" >/dev/null && names="$names $name"
+	done
+
+	echo "$names"
+}
+
+self_outdated() {
+	local name have want
+
+	for name in $(self_packages); do
+		have=$(sys_installed "$name") || continue
+		want=$(sys_available "$name") || continue
+		[ "$want" != "$have" ] && return 0
+	done
+
+	return 1
+}
+
+self_upgrade() {
+	local names
+
+	names=$(self_packages)
+	[ -n "$names" ] || return 1
+
+	# shellcheck disable=SC2086
+	sys_retry 3 10 sys_upgrade $names
 }
 
 lan_subnets() {

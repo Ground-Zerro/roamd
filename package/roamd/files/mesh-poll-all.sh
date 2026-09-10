@@ -4,8 +4,7 @@
 . /usr/share/libubox/jshn.sh
 
 mode="${1:-monitor}"
-OUTDIR="/var/run/roamd/members"
-mkdir -p "$OUTDIR"
+mkdir -p "$MEMBERS_DIR"
 
 profile=$(/usr/libexec/roamd/mesh-profile.sh)
 
@@ -24,19 +23,18 @@ c_enc=$(ctrl_ap_field encryption)
 c_md=$(ctrl_ap_field mobility_domain)
 c_ft=$(ctrl_ap_field ieee80211r)
 c_bh=$(uci -q get roamd.mesh.backhaul_ssid)
-auto_update=$(uci -q get roamd.mesh.auto_update)
 
-for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'); do
+for sect in $(member_sections); do
 	id=$(uci -q get "roamd.$sect.id")
 	addr=$(uci -q get "roamd.$sect.addr")
 	managed=$(uci -q get "roamd.$sect.managed")
 	[ -n "$id" ] && [ -n "$addr" ] || continue
 
-	was_online=$(jsonfilter -e '@.online' < "$OUTDIR/$id.json" 2>/dev/null)
+	was_online=$(jsonfilter -e '@.online' < "$MEMBERS_DIR/$id.json" 2>/dev/null)
 
 	session=$(rpc_login "$addr" "$id")
 	if [ -z "$session" ]; then
-		printf '{"online":false}' > "$OUTDIR/$id.json"
+		printf '{"online":false}' > "$MEMBERS_DIR/$id.json"
 		continue
 	fi
 
@@ -55,7 +53,6 @@ for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9
 		if [ -n "$target" ] && { sys_newer "$target" "$node_ver" ||
 			{ [ -n "$node_ui" ] && [ -n "$target_ui" ] && sys_newer "$target_ui" "$node_ui"; }; }; then
 			upd=true
-			[ "$auto_update" = "1" ] && ubus -t 3 call roamd mesh_update "{\"id\":\"$id\"}" >/dev/null 2>&1
 		else
 			upd=false
 		fi
@@ -80,8 +77,8 @@ for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9
 			*) cons=degraded ;;
 		esac
 
-		src=$(cat "$OUTDIR/${id}.pkgsrc" 2>/dev/null)
-		echo "$report" | sed "s/}\$/,\"online\":true,\"update_available\":$upd,\"pkg_source\":\"$src\",\"consistency\":\"$cons\",\"issues\":[$issues]}/" > "$OUTDIR/$id.json"
+		src=$(cat "$MEMBERS_DIR/${id}.pkgsrc" 2>/dev/null)
+		echo "$report" | sed "s/}\$/,\"online\":true,\"update_available\":$upd,\"pkg_source\":\"$src\",\"consistency\":\"$cons\",\"issues\":[$issues]}/" > "$MEMBERS_DIR/$id.json"
 
 		name=$(uci -q get "roamd.$sect.name")
 		events=$(echo "$report" | jsonfilter -e '@.events' 2>/dev/null)
@@ -89,7 +86,7 @@ for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9
 			ubus -t 3 call roamd mesh_log_ingest "{\"node\":\"$name\",\"events\":$events}" >/dev/null 2>&1
 		fi
 	else
-		printf '{"online":false}' > "$OUTDIR/$id.json"
+		printf '{"online":false}' > "$MEMBERS_DIR/$id.json"
 	fi
 done
 
@@ -118,12 +115,12 @@ ubus call roamd mesh_report > "$self_report" 2>/dev/null &&
 	collect_seen "$self_report" controller local
 rm -f "$self_report"
 
-for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'); do
+for sect in $(member_sections); do
 	id=$(uci -q get "roamd.$sect.id")
 	addr=$(uci -q get "roamd.$sect.addr")
-	[ -n "$id" ] && [ -f "$OUTDIR/$id.json" ] || continue
+	[ -n "$id" ] && [ -f "$MEMBERS_DIR/$id.json" ] || continue
 
-	collect_seen "$OUTDIR/$id.json" "$id" "$addr"
+	collect_seen "$MEMBERS_DIR/$id.json" "$id" "$addr"
 done
 
 node_in() { local a; for a in $2; do [ "$a" = "$1" ] && return 0; done; return 1; }
@@ -148,9 +145,9 @@ for mac in $(awk '{print $1}' "$seen" | sort -u); do
 
 	neigh=""; j=0
 	while :; do
-		bj=$(jsonfilter -e "@.aps[$j].bssid" < "$OUTDIR/$best_id.json" 2>/dev/null)
+		bj=$(jsonfilter -e "@.aps[$j].bssid" < "$MEMBERS_DIR/$best_id.json" 2>/dev/null)
 		[ -n "$bj" ] || break
-		nr=$(jsonfilter -e "@.aps[$j].nr" < "$OUTDIR/$best_id.json" 2>/dev/null)
+		nr=$(jsonfilter -e "@.aps[$j].nr" < "$MEMBERS_DIR/$best_id.json" 2>/dev/null)
 		[ -n "$nr" ] && neigh="$neigh${neigh:+,}\"$nr\""
 		j=$((j + 1))
 	done
@@ -206,9 +203,9 @@ add_aps() {
 }
 
 add_aps "$ms" self_aps
-for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'); do
+for sect in $(member_sections); do
 	id=$(uci -q get "roamd.$sect.id")
-	[ -n "$id" ] && [ -f "$OUTDIR/$id.json" ] && add_aps "$OUTDIR/$id.json" aps
+	[ -n "$id" ] && [ -f "$MEMBERS_DIR/$id.json" ] && add_aps "$MEMBERS_DIR/$id.json" aps
 done
 json_close_array
 payload=$(json_dump)
@@ -216,7 +213,7 @@ rm -f "$ms"
 
 if [ "$nb" -gt 0 ]; then
 	ubus -t 3 call roamd mesh_neighbors "$payload" >/dev/null 2>&1
-	for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'); do
+	for sect in $(member_sections); do
 		id=$(uci -q get "roamd.$sect.id")
 		addr=$(uci -q get "roamd.$sect.addr")
 		[ -n "$id" ] && [ -n "$addr" ] || continue

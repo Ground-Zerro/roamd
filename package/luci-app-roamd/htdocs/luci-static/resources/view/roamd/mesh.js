@@ -95,7 +95,8 @@ var callMeshMemberUpdate = rpc.declare({
 var callMeshSettings = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
-	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'auto_update', 'pkg_url', 'controller_name' ],
+	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'auto_update',
+		'auto_update_every', 'auto_update_unit', 'pkg_url', 'controller_name' ],
 	expect: { }
 });
 
@@ -223,8 +224,18 @@ var ACQUIRE_ERR = {
 var ACQUIRE_ORDER = [ 'probe', 'install', 'enroll', 'network', 'profile', 'done' ];
 
 var ACQUIRE_MSG = [
-	[ /^updating roamd for (.+)$/, function(m) { return _('roamd for OpenWrt %s').format(m[1]); } ],
+	[ /^updating roamd on the node$/, function() { return _('installing roamd on the node'); } ],
 	[ /^updated$/, function() { return _('the node is up to date'); } ],
+	[ /^checking the repository$/, function() { return _('asking the repository'); } ],
+	[ /^the controller is updated$/, function() { return _('the controller is updated'); } ],
+	[ /^update installed$/, function() { return _('the update is installed'); } ],
+	[ /^no updates$/, function() { return _('no updates available'); } ],
+	[ /^some nodes were not updated$/, function() { return _('some nodes were not updated'); } ],
+	[ /^node is unreachable$/, function() { return _('the node is unreachable'); } ],
+	[ /^unknown OpenWrt version$/, function() { return _('unknown OpenWrt version'); } ],
+	[ /^no package for the OpenWrt version of the node$/, function() { return _('no package for the OpenWrt version of the node'); } ],
+	[ /^package installation failed on the node$/, function() { return _('the package could not be installed on the node'); } ],
+	[ /^package source is not trusted: .*$/, function() { return _('the package source is not trusted: the repository must be https and its certificate must be in /etc/roamd/pkg.crt'); } ],
 	[ /^installing roamd and interface for (.+)$/, function(m) { return _('packages for OpenWrt %s').format(m[1]); } ],
 	[ /^repository unreachable, installed from the controller cache$/, function() { return _('repository unreachable, installed from the cache'); } ],
 	[ /^assigning node role$/, function() { return _('assigning the node role'); } ],
@@ -263,6 +274,7 @@ function acquireMsgText(msg) {
 }
 
 var ACQUIRE_STEP = {
+	check: _('checking for updates'),
 	probe: _('checking the device'),
 	reset: _('resetting the device'),
 	update: _('updating packages'),
@@ -370,6 +382,7 @@ function acquireProgress(steps, kind) {
 	var state = {};
 	var first = steps.length ? steps[0].step : null;
 	var order = (kind === 'release' || first === 'reset') ? [ 'reset', 'done' ]
+		: (kind === 'autoupdate' || first === 'check') ? [ 'check', 'update', 'done' ]
 		: (kind === 'update' || kind === 'selfupdate' || first === 'update') ? [ 'update', 'done' ]
 		: ACQUIRE_ORDER.slice();
 	var reached = -1;
@@ -400,7 +413,8 @@ function acquireProgress(steps, kind) {
 		else if (!state[step])
 			text = _('waiting');
 		else if (done && step === 'done')
-			text = kind === 'selfupdate' ? _('the controller is up to date')
+			text = kind === 'autoupdate' ? acquireMsgText(s.message)
+				: kind === 'selfupdate' ? _('the controller is up to date')
 				: (kind === 'update' || s.message === 'updated') ? _('the node is up to date')
 				: kind === 'release' ? _('the device is released')
 				: _('the node is part of the system');
@@ -481,10 +495,12 @@ function renderNodes(state) {
 	}, _('Add a new node'));
 
 	var kind = busy ? state.acquire.kind : '';
-	var kindTitle = kind === 'selfupdate' ? _('Updating the controller')
+	var kindTitle = kind === 'autoupdate' ? _('Automatic update')
+		: kind === 'selfupdate' ? _('Updating the controller')
 		: kind === 'update' ? _('Updating the node')
 		: kind === 'release' ? _('Remove the node') : _('Capturing the node');
-	var kindNote = kind === 'selfupdate' ? _('The controller is being updated now')
+	var kindNote = kind === 'autoupdate' ? _('An automatic update is running now')
+		: kind === 'selfupdate' ? _('The controller is being updated now')
 		: kind === 'update' ? _('A node is being updated now')
 		: kind === 'release' ? _('A node is being removed now') : _('A node is being captured now');
 
@@ -555,7 +571,7 @@ function renderNodes(state) {
 		var via = viaLabel(m, state);
 
 		return [ nameCell(m), m.client_count || 0, consistencyCell(m.online, m),
-			m.uptime ? '%t'.format(m.uptime) : '-', m.addr || '-', m.mac || '-',
+			m.uptime ? '%t'.format(m.uptime) : '-', nodeAddrCell(m), m.mac || '-',
 			via, conn, ver, actions ];
 	}));
 
@@ -579,7 +595,7 @@ function controllerRow(state) {
 	if (self.pkg_version)
 		ver = '%s / roamd %s'.format(ver, self.pkg_version);
 
-	var check = E('button', {
+	var check = state.auto_update ? '' : E('button', {
 		'class': 'btn cbi-button',
 		'disabled': readOnly ? 'disabled' : null,
 		'click': function() { checkSelfUpdate(); }
@@ -678,9 +694,25 @@ function renameController(current) {
 		if (name === current)
 			return;
 
-		callMeshSettings(undefined, undefined, undefined, undefined, undefined, undefined, name)
-			.then(refreshNodes);
+		callMeshSettings(undefined, undefined, undefined, undefined, undefined, undefined,
+			undefined, undefined, name).then(refreshNodes);
 	});
+}
+
+function nodeAddrCell(m) {
+	if (!m.addr)
+		return '-';
+
+	return E('span', {}, [
+		m.addr, ' ',
+		E('a', {
+			'href': 'http://%s/'.format(m.addr),
+			'target': '_blank',
+			'rel': 'noreferrer',
+			'title': _('Open the node web interface'),
+			'style': 'text-decoration:none'
+		}, '🌐')
+	]);
 }
 
 function nameCell(m) {
@@ -708,9 +740,13 @@ function renameMember(id, current) {
 function refreshNodes() {
 	return callMeshStatus().then(function(fresh) {
 		var pane = document.getElementById('mesh-nodes-pane');
+		var last = document.getElementById('mesh-last-check');
 
 		if (pane)
 			dom.content(pane, renderNodes(fresh || {}));
+
+		if (last)
+			dom.content(last, lastCheckText(fresh || {}));
 	});
 }
 
@@ -1316,6 +1352,34 @@ function renderClients(state) {
 	]);
 }
 
+var AUTO_UNITS = [
+	{ unit: 'hour', label: _('hours'), max: 23 },
+	{ unit: 'day', label: _('days'), max: 31 },
+	{ unit: 'week', label: _('weeks'), max: 5 },
+	{ unit: 'month', label: _('months'), max: 12 }
+];
+
+var AUTO_RESULT = {
+	updated: _('updated'),
+	none: _('no updates'),
+	error: _('the check failed')
+};
+
+function lastCheckText(state) {
+	var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+	var d, when, result;
+
+	if (!state.auto_update_last)
+		return _('not performed yet');
+
+	d = new Date(state.auto_update_last * 1000);
+	when = '%s-%s-%s %s:%s'.format(pad(d.getDate()), pad(d.getMonth() + 1),
+		d.getFullYear(), pad(d.getHours()), pad(d.getMinutes()));
+	result = AUTO_RESULT[state.auto_update_result];
+
+	return result ? '%s — %s'.format(when, result) : when;
+}
+
 function renderSettings(state) {
 	var form = {
 		backhaul_enabled: !!state.backhaul_enabled,
@@ -1323,14 +1387,20 @@ function renderSettings(state) {
 		backhaul_key: state.backhaul_key || '',
 		wifi_shutdown: !!state.wifi_shutdown,
 		auto_update: !!state.auto_update,
-		pkg_url: state.pkg_url || ''
+		auto_update_every: state.auto_update_every || 1,
+		auto_update_unit: state.auto_update_unit || 'day',
+		pkg_url: state.pkg_url === state.pkg_url_default ? '' : (state.pkg_url || '')
 	};
 
-	function toggle(key, label, desc) {
+	function toggle(key, label, desc, onchange) {
 		var input = E('input', {
 			'type': 'checkbox', 'checked': form[key] ? 'checked' : null,
 			'disabled': readOnly || null,
-			'change': function(ev) { form[key] = ev.target.checked; }
+			'change': function(ev) {
+				form[key] = ev.target.checked;
+				if (onchange)
+					onchange();
+			}
 		});
 
 		return E('div', { 'class': 'cbi-value' }, [
@@ -1381,6 +1451,70 @@ function renderSettings(state) {
 		return bands.length ? bands.join(', ') : _('not broadcasting');
 	}
 
+	function unitMax(unit) {
+		for (var i = 0; i < AUTO_UNITS.length; i++)
+			if (AUTO_UNITS[i].unit === unit)
+				return AUTO_UNITS[i].max;
+
+		return 1;
+	}
+
+	function clampEvery(value) {
+		var max = unitMax(form.auto_update_unit);
+		var n = parseInt(value, 10);
+
+		if (isNaN(n) || n < 1)
+			n = 1;
+
+		return n > max ? max : n;
+	}
+
+	var everyInput = E('input', {
+		'type': 'number', 'class': 'cbi-input-text', 'style': 'width:5em',
+		'min': 1, 'max': unitMax(form.auto_update_unit),
+		'value': form.auto_update_every, 'disabled': readOnly || null,
+		'change': function(ev) {
+			form.auto_update_every = clampEvery(ev.target.value);
+			ev.target.value = form.auto_update_every;
+		}
+	});
+
+	var unitSelect = E('select', {
+		'class': 'cbi-input-select', 'disabled': readOnly || null,
+		'change': function(ev) {
+			form.auto_update_unit = ev.target.value;
+			everyInput.max = unitMax(form.auto_update_unit);
+			form.auto_update_every = clampEvery(everyInput.value);
+			everyInput.value = form.auto_update_every;
+		}
+	}, AUTO_UNITS.map(function(u) {
+		return E('option', {
+			'value': u.unit,
+			'selected': u.unit === form.auto_update_unit ? 'selected' : null
+		}, u.label);
+	}));
+
+	var intervalRow = E('div', { 'class': 'cbi-value' }, [
+		E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Check for updates every')),
+		E('div', { 'class': 'cbi-value-field' }, [
+			everyInput, ' ', unitSelect,
+			E('div', { 'class': 'cbi-value-description' },
+				_('The controller checks the repository on this schedule and installs the update itself — first on the controller, then on the nodes.'))
+		])
+	]);
+
+	var lastRow = E('div', { 'class': 'cbi-value' }, [
+		E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Last check')),
+		E('div', { 'class': 'cbi-value-field', 'id': 'mesh-last-check' }, lastCheckText(state))
+	]);
+
+	function autoRows() {
+		var display = form.auto_update ? '' : 'none';
+
+		intervalRow.style.display = display;
+		lastRow.style.display = display;
+	}
+
 	var save = E('button', {
 		'class': 'btn cbi-button cbi-button-save',
 		'disabled': readOnly || null,
@@ -1391,11 +1525,14 @@ function renderSettings(state) {
 				form.backhaul_ssid, form.backhaul_key,
 				form.wifi_shutdown ? '1' : '0',
 				form.auto_update ? '1' : '0',
+				String(form.auto_update_every), form.auto_update_unit,
 				form.pkg_url
 			).then(function() { status.textContent = _('Saved.'); },
 			       function() { status.textContent = _('Save failed.'); });
 		}
 	}, _('Save'));
+
+	autoRows();
 
 	return E('div', {}, [
 		E('h3', {}, _('Wireless backhaul')),
@@ -1414,9 +1551,12 @@ function renderSettings(state) {
 
 		E('h3', {}, _('Automatic update')),
 		toggle('auto_update', _('Automatic update'),
-			_('roamd is updated automatically on all nodes when a newer package is available.')),
+			_('roamd is updated automatically on the controller and on all nodes when a newer package is available.'),
+			autoRows),
+		intervalRow,
+		lastRow,
 		text('pkg_url', _('Package repository'),
-			_('Where the controller takes roamd packages for the nodes. Only https:// is accepted, and the repository certificate must be placed in /etc/roamd/pkg.crt — the delivery installs software on every node.')),
+			_('Leave empty to use the project repository. Fill it in only for your own repository: only https:// is accepted, and its certificate must be placed in /etc/roamd/pkg.crt — the delivery installs software on every node.')),
 
 		E('div', { 'class': 'cbi-page-actions' }, [ save, status ])
 	]);

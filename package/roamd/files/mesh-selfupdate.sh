@@ -12,14 +12,7 @@ fail() { report update error "$1"; exit 1; }
 report update progress "installing packages on the controller"
 
 sys_retry 3 5 sys_index_update || fail "package index is not available"
-
-names=""
-for name in $PKG_MAIN $PKG_UI; do
-	sys_installed "$name" >/dev/null && names="$names $name"
-done
-
-# shellcheck disable=SC2086
-sys_retry 3 10 sys_upgrade $names || fail "package installation failed"
+self_upgrade || fail "package installation failed"
 
 report done ok updated
 
