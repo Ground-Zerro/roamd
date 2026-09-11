@@ -4,9 +4,7 @@
 
 PHASE="$1"
 TASK="$2"
-STATE="$ACQUIRE_DIR/$TASK"
 
-report() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$STATE"; }
 
 record() {
 	uci -q set "roamd.mesh.auto_update_last=$(date +%s)"
@@ -47,13 +45,13 @@ update_nodes() {
 }
 
 if [ "$PHASE" = "nodes" ]; then
+	task_attach "$TASK"
 	update_nodes 1
 	( sleep 2; /etc/init.d/roamd restart ) >/dev/null 2>&1 &
 	exit 0
 fi
 
-acquire_dir_trim
-: > "$STATE"
+task_open "$TASK"
 report check progress "checking the repository"
 
 if ! sys_retry 3 5 sys_index_update; then

@@ -101,6 +101,17 @@ static void status_add_pairing(struct roam_bss *bss)
 	blobmsg_close_table(&b, table);
 }
 
+static int roamd_config(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	blob_buf_init(&b, 0);
+	roam_config_dump(&b);
+	ubus_send_reply(ctx, req, b.head);
+
+	return 0;
+}
+
 static int roamd_status(struct ubus_context *ctx, struct ubus_object *obj,
 			struct ubus_request_data *req, const char *method,
 			struct blob_attr *msg)
@@ -710,6 +721,7 @@ static int roamd_mesh_log_ingest(struct ubus_context *ctx, struct ubus_object *o
 
 static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD_NOARG("status", roamd_status),
+	UBUS_METHOD_NOARG("config", roamd_config),
 	UBUS_METHOD_NOARG("reload", roamd_reload),
 	UBUS_METHOD_NOARG("mesh_status", roamd_mesh_status),
 	UBUS_METHOD_NOARG("mesh_clients", roamd_mesh_clients),

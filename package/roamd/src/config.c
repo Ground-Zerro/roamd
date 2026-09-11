@@ -62,7 +62,7 @@ static const struct opt_desc opts[] = {
 	OPT("kick_delay", OPT_U32, kick_delay),
 	OPT("steer_retries", OPT_U32, steer_retries),
 	OPT("beacon_req_interval", OPT_U32, beacon_req_interval),
-	OPT("log_level", OPT_U32, log_level)
+	OPT("log_level", OPT_INT, log_level)
 };
 
 #undef OPT
@@ -245,6 +245,39 @@ static void device_load(struct uci_context *ctx, struct uci_section *s)
 
 	if (avl_insert(&device_tree, &dev->avl))
 		free(dev);
+}
+
+void roam_config_dump(struct blob_buf *b)
+{
+	char value[64];
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(opts); i++) {
+		const struct opt_desc *o = &opts[i];
+		const void *field = (const char *)&config + o->offset;
+
+		switch (o->type) {
+		case OPT_BOOL:
+			snprintf(value, sizeof(value), "%u", *(const bool *)field);
+			break;
+		case OPT_INT:
+			snprintf(value, sizeof(value), "%d", *(const int *)field);
+			break;
+		case OPT_U32:
+			snprintf(value, sizeof(value), "%u", *(const uint32_t *)field);
+			break;
+		case OPT_STR:
+			snprintf(value, sizeof(value), "%s", (const char *)field);
+			break;
+		case OPT_PREFER:
+			snprintf(value, sizeof(value), "%s",
+				 *(const enum roam_prefer *)field == PREFER_HIGH ? "5" :
+				 *(const enum roam_prefer *)field == PREFER_LOW ? "2.4" : "none");
+			break;
+		}
+
+		blobmsg_add_string(b, o->name, value);
+	}
 }
 
 static void section_load(struct uci_context *ctx, struct uci_section *s)

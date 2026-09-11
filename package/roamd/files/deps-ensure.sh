@@ -148,18 +148,10 @@ ensure_wpad() {
 	return 0
 }
 
-ensure_curl() {
-	[ "$(uci -q get roamd.mesh.role)" = "node" ] && return 0
-	command -v curl >/dev/null 2>&1 && return 0
-
-	index_update || { problem="package index is not available, curl missing — no control channel"; return 1; }
-
-	pkg_install curl && command -v curl >/dev/null 2>&1 || {
-		problem="curl cannot be installed — no control channel to the nodes"
-		return 1
-	}
-
-	say "curl installed for the mesh control channel"
+curl_needed() {
+	[ "$(uci -q get roamd.mesh.role)" = "node" ] && return 1
+	[ -n "$(member_sections)" ] || return 1
+	command -v curl >/dev/null 2>&1 && return 1
 
 	return 0
 }
@@ -171,11 +163,14 @@ installed=$(installed_names) || finish fail "$mgr gave no package list"
 problem=""
 index_done=""
 
-if ! is_full "$(current_pkg "$installed")" || ! command -v curl >/dev/null 2>&1; then
+if ! is_full "$(current_pkg "$installed")" || curl_needed; then
 	have_network || finish fail "no network yet, dependencies will be checked again later"
 fi
 
 ensure_wpad || finish fail "$problem"
-ensure_curl || finish fail "$problem"
 
-finish ok "$(current_pkg "$installed") supports 802.11v, the control channel is ready"
+if curl_needed && ! ensure_curl; then
+	finish fail "curl cannot be installed — no control channel to the nodes"
+fi
+
+finish ok "$(current_pkg "$installed") supports 802.11v"

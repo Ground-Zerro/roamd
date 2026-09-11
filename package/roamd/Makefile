@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.0.1-r4
+PKG_VERSION:=1.0.1-r10
 PKG_RELEASE:=
 
 PKG_LICENSE:=GPL-3.0-only

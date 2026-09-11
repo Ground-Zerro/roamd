@@ -16,6 +16,7 @@ struct avl_tree roam_bss_tree;
 struct list_head roam_bss_list;
 
 #define PROVISION_DELAY		2000
+#define NEIGHBOR_REFRESH	60000
 
 static struct blob_buf b;
 static struct ubus_event_handler add_handler;
@@ -240,9 +241,23 @@ static void nr_own_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 	bss->nr = blob_memdup(nr);
 }
 
+static uint32_t blob_fingerprint(const struct blob_attr *attr)
+{
+	const uint8_t *p = (const uint8_t *)attr;
+	size_t len = blob_raw_len(attr);
+	uint32_t h = 2166136261u;
+	size_t i;
+
+	for (i = 0; i < len; i++)
+		h = (h ^ p[i]) * 16777619u;
+
+	return h;
+}
+
 static void neighbor_sync(struct roam_bss *bss)
 {
 	struct roam_bss *peer;
+	uint32_t fp;
 	void *list;
 	int count = 0;
 
@@ -269,8 +284,16 @@ static void neighbor_sync(struct roam_bss *bss)
 
 	blobmsg_close_array(&b, list);
 
-	if (count)
-		roam_bss_invoke(bss, "rrm_nr_set", &b);
+	if (!count)
+		return;
+
+	fp = blob_fingerprint(b.head);
+	if (fp == bss->nr_sent && roam_now - bss->nr_sent_at < NEIGHBOR_REFRESH)
+		return;
+
+	roam_bss_invoke(bss, "rrm_nr_set", &b);
+	bss->nr_sent = fp;
+	bss->nr_sent_at = roam_now;
 }
 
 void roam_neighbors_resync(void)

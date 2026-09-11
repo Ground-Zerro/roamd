@@ -221,21 +221,6 @@ void mesh_log_dump(struct blob_buf *b, unsigned int limit)
 	blobmsg_close_array(b, arr);
 }
 
-void mesh_log_since(struct blob_buf *b, uint32_t after)
-{
-	void *arr = blobmsg_open_array(b, "events");
-	unsigned int i;
-
-	for (i = 0; i < ring_count; i++) {
-		unsigned int idx = (ring_head + i) % MESH_LOG_MAX;
-
-		if (ring[idx].seq > after)
-			event_to_blob(b, &ring[idx]);
-	}
-
-	blobmsg_close_array(b, arr);
-}
-
 enum {
 	EVF_SEQ,
 	EVF_TS,

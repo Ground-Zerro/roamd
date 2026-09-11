@@ -18,8 +18,7 @@
 #define MESH_DUMBAP		"/usr/libexec/roamd/mesh-dumbap.sh"
 
 static struct uloop_timeout watch_timer;
-static struct uloop_process dumbap_proc;
-static bool dumbap_busy;
+static struct mesh_task dumbap_job;
 static uint64_t last_contact;
 static bool contact_seen;
 static uint64_t bh_since;
@@ -28,26 +27,9 @@ static bool aps_state_known;
 static bool bh_up;
 static int bh_band;
 
-static void dumbap_done(struct uloop_process *p, int ret)
-{
-	dumbap_busy = false;
-}
-
 void mesh_node_dumbap(void)
 {
-	pid_t pid;
-
-	if (dumbap_busy)
-		return;
-
-	pid = mesh_spawn(MESH_DUMBAP, NULL, NULL);
-	if (pid <= 0)
-		return;
-
-	dumbap_proc.pid = pid;
-	dumbap_proc.cb = dumbap_done;
-	uloop_process_add(&dumbap_proc);
-	dumbap_busy = true;
+	mesh_task_start(&dumbap_job, MESH_DUMBAP, NULL, NULL);
 }
 
 void mesh_node_touch(void)
@@ -58,42 +40,30 @@ void mesh_node_touch(void)
 
 static void aps_set_disabled(bool disabled)
 {
-	struct uci_context *ctx = uci_alloc_context();
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_element *e;
 	uint32_t id;
-	bool changed = false;
 
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return;
 
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
-
-	uci_foreach_element(&pkg->sections, e) {
+	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
-		const char *mode = uci_lookup_option_string(ctx, s, "mode");
-		struct uci_ptr ptr = {
-			.package = "wireless", .section = s->e.name,
-			.option = "disabled", .value = disabled ? "1" : "0",
-		};
+		const char *mode = uci_lookup_option_string(u.ctx, s, "mode");
 
 		if (!mode || strcmp(mode, "ap"))
 			continue;
 
-		uci_set(ctx, &ptr);
-		changed = true;
+		uci_session_set(&u, s->e.name, "disabled", disabled ? "1" : "0");
 	}
 
-	if (changed) {
-		uci_commit(ctx, &pkg, false);
-		if (!ubus_lookup_id(ubus_ctx, "network", &id))
-			ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
+	if (u.dirty && !ubus_lookup_id(ubus_ctx, "network", &id)) {
+		uci_session_close(&u);
+		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
+		return;
 	}
 
-	uci_free_context(ctx);
+	uci_session_close(&u);
 }
 
 static void aps_ensure(bool up)
@@ -516,58 +486,46 @@ static void apply_system(struct blob_attr *sys)
 {
 	static const char *const names[] = { "timezone", "zonename" };
 	struct blob_attr *tb[__SYS_MAX];
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
-	struct uci_element *e;
-	bool changed = false;
+	struct uci_session u;
+	struct uci_section *sec;
+	size_t i;
 
 	if (!sys)
 		return;
 
 	blobmsg_parse(system_policy, __SYS_MAX, tb, blobmsg_data(sys), blobmsg_data_len(sys));
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "system"))
 		return;
 
-	if (uci_load(ctx, "system", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
+	sec = uci_session_find(&u, "system", NULL, NULL);
 
-	uci_foreach_element(&pkg->sections, e) {
-		struct uci_section *s = uci_to_section(e);
-		size_t i;
+	for (i = 0; sec && i < ARRAY_SIZE(names); i++) {
+		const char *cur = uci_lookup_option_string(u.ctx, sec, names[i]);
+		const char *want;
 
-		if (strcmp(s->type, "system"))
+		if (!tb[i])
 			continue;
 
-		for (i = 0; i < ARRAY_SIZE(names); i++) {
-			const char *cur = uci_lookup_option_string(ctx, s, names[i]);
-			const char *want;
+		want = blobmsg_get_string(tb[i]);
+		if (cur && !strcmp(cur, want))
+			continue;
 
-			if (!tb[i])
-				continue;
-
-			want = blobmsg_get_string(tb[i]);
-			if (cur && !strcmp(cur, want))
-				continue;
-
-			mesh_uci_set(ctx, "system", s->e.name, names[i], want);
-			changed = true;
-		}
-		break;
+		uci_session_set(&u, sec->e.name, names[i], want);
 	}
 
-	if (changed) {
-		uci_commit(ctx, &pkg, false);
+	if (u.dirty) {
+		uci_session_close(&u);
+
 		if (system("/etc/init.d/system reload >/dev/null 2>&1"))
 			roam_log(ROAM_L_ERR, "mesh: time zone written, reload failed");
 		else
 			roam_log(ROAM_L_INFO, "mesh: time zone updated from the controller");
+
+		return;
 	}
 
-	uci_free_context(ctx);
+	uci_session_close(&u);
 }
 
 static bool apply_credentials(struct blob_attr *cred)
@@ -1023,7 +981,7 @@ static void diag_cmd(struct blob_buf *b, const char *name, const char *cmd)
 	pclose(f);
 }
 
-void mesh_node_diag(struct blob_buf *b)
+static void node_identity_blob(struct blob_buf *b)
 {
 	char value[MESH_NAME_MAX];
 
@@ -1033,9 +991,13 @@ void mesh_node_diag(struct blob_buf *b)
 	blobmsg_add_string(b, "arch", value);
 	package_version("roamd", value, sizeof(value));
 	blobmsg_add_string(b, "pkg_version", value);
-
 	package_version("luci-app-roamd", value, sizeof(value));
 	blobmsg_add_string(b, "ui_version", value);
+}
+
+void mesh_node_diag(struct blob_buf *b)
+{
+	node_identity_blob(b);
 
 	diag_cmd(b, "hostapd_pkg",
 		 "(apk info 2>/dev/null || opkg list-installed 2>/dev/null | awk '{print $1}') | "
@@ -1113,15 +1075,7 @@ void mesh_self_info(struct blob_buf *b)
 	struct sysinfo si;
 	char value[32];
 
-	release_field("DISTRIB_RELEASE=", value, sizeof(value));
-	blobmsg_add_string(b, "os_version", value);
-	release_field("DISTRIB_ARCH=", value, sizeof(value));
-	blobmsg_add_string(b, "arch", value);
-
-	package_version("roamd", value, sizeof(value));
-	blobmsg_add_string(b, "pkg_version", value);
-	package_version("luci-app-roamd", value, sizeof(value));
-	blobmsg_add_string(b, "ui_version", value);
+	node_identity_blob(b);
 
 	if (!sysinfo(&si))
 		blobmsg_add_u32(b, "uptime", si.uptime);
@@ -1141,7 +1095,6 @@ void mesh_node_report(struct blob_buf *b)
 	struct roam_sta *sta;
 	struct mesh_assoc_idx assoc;
 	uint8_t pmac[6];
-	char version[32];
 	void *clients;
 	unsigned int count = 0;
 
@@ -1154,15 +1107,8 @@ void mesh_node_report(struct blob_buf *b)
 	blobmsg_add_string(b, "member_id", mesh.member_id);
 	blobmsg_add_string(b, "controller_id", mesh.controller_id);
 
-	release_field("DISTRIB_RELEASE=", version, sizeof(version));
-	blobmsg_add_string(b, "os_version", version);
-	release_field("DISTRIB_ARCH=", version, sizeof(version));
-	blobmsg_add_string(b, "arch", version);
+	node_identity_blob(b);
 	blobmsg_add_string(b, "roamd_version", ROAMD_VERSION);
-	package_version("roamd", version, sizeof(version));
-	blobmsg_add_string(b, "pkg_version", version);
-	package_version("luci-app-roamd", version, sizeof(version));
-	blobmsg_add_string(b, "ui_version", version);
 
 	if (!sysinfo(&si))
 		blobmsg_add_u32(b, "uptime", si.uptime);

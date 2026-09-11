@@ -3,7 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -33,40 +32,28 @@
 #define AUTOUPDATE_BUSY_RETRY	300000
 #define AUTOUPDATE_FAIL_RETRY	1800
 
-static struct uloop_process discover_proc;
-static struct uloop_process acquire_proc;
-static struct uloop_process poll_proc;
-static struct uloop_process sync_proc;
+static void acquire_done(struct mesh_task *task, int ret);
+static void sync_done(struct mesh_task *task, int ret);
+
+static bool sync_pending;
+
+static struct mesh_task discover_job;
+static struct mesh_task acquire_job = { .done = acquire_done };
+static struct mesh_task poll_job;
+static struct mesh_task sync_job = { .done = sync_done };
 static struct uloop_timeout poll_timer;
 static struct uloop_timeout autoupdate_timer;
-static bool discover_busy;
-static bool poll_busy;
-static bool sync_busy;
 static char acquire_task[32];
 static char acquire_addr[MESH_ADDR_MAX];
 static const char *acquire_kind = "";
-
-static void discover_done(struct uloop_process *p, int ret)
-{
-	discover_busy = false;
-}
 
 void mesh_ctrl_discover(struct blob_buf *b)
 {
 	char *data;
 
-	if (!discover_busy) {
-		pid_t pid = mesh_spawn(MESH_DISCOVER, NULL, NULL);
+	mesh_task_start(&discover_job, MESH_DISCOVER, NULL, NULL);
 
-		if (pid > 0) {
-			discover_proc.pid = pid;
-			discover_proc.cb = discover_done;
-			uloop_process_add(&discover_proc);
-			discover_busy = true;
-		}
-	}
-
-	blobmsg_add_u8(b, "scanning", discover_busy);
+	blobmsg_add_u8(b, "scanning", discover_job.busy);
 
 	data = mesh_slurp(CANDIDATES, 32768);
 	if (data) {
@@ -76,11 +63,6 @@ void mesh_ctrl_discover(struct blob_buf *b)
 		void *a = blobmsg_open_array(b, "candidates");
 		blobmsg_close_array(b, a);
 	}
-}
-
-static bool acquire_busy(void)
-{
-	return acquire_proc.pid && !kill(acquire_proc.pid, 0);
 }
 
 static bool acquire_mac_read(char *out, size_t size)
@@ -107,7 +89,7 @@ bool mesh_ctrl_acquire_mac(uint8_t *out)
 	struct ether_addr ea;
 	char mac[32];
 
-	if (!acquire_busy() || !acquire_mac_read(mac, sizeof(mac)))
+	if (!acquire_job.busy || !acquire_mac_read(mac, sizeof(mac)))
 		return false;
 
 	if (!ether_aton_r(mac, &ea))
@@ -123,7 +105,7 @@ void mesh_ctrl_acquire_blob(struct blob_buf *b)
 	void *t = blobmsg_open_table(b, "acquire");
 	char mac[32];
 
-	blobmsg_add_u8(b, "running", acquire_busy());
+	blobmsg_add_u8(b, "running", acquire_job.busy);
 	if (acquire_kind[0])
 		blobmsg_add_string(b, "kind", acquire_kind);
 	if (acquire_task[0])
@@ -136,9 +118,10 @@ void mesh_ctrl_acquire_blob(struct blob_buf *b)
 	blobmsg_close_table(b, t);
 }
 
-static void acquire_done(struct uloop_process *p, int ret)
+static void acquire_done(struct mesh_task *task, int ret)
 {
 	roam_config_load();
+	mesh_ctrl_backhaul_apply();
 	mesh_ctrl_autoupdate_arm();
 }
 
@@ -156,9 +139,7 @@ static struct mesh_member *member_by_id(const char *id)
 static void acquire_start(const char *kind, const char *script, const char *arg,
 			  const char *addr, struct blob_buf *b)
 {
-	pid_t pid;
-
-	if (acquire_busy()) {
+	if (acquire_job.busy) {
 		if (b) {
 			blobmsg_add_string(b, "error", "busy");
 			blobmsg_add_string(b, "task_id", acquire_task);
@@ -172,16 +153,11 @@ static void acquire_start(const char *kind, const char *script, const char *arg,
 	snprintf(acquire_addr, sizeof(acquire_addr), "%s", addr ? addr : "");
 	acquire_kind = kind;
 
-	pid = mesh_spawn(script, arg ? arg : "", acquire_task);
-	if (pid <= 0) {
+	if (!mesh_task_start(&acquire_job, script, arg ? arg : "", acquire_task)) {
 		if (b)
 			blobmsg_add_string(b, "error", "spawn_failed");
 		return;
 	}
-
-	acquire_proc.pid = pid;
-	acquire_proc.cb = acquire_done;
-	uloop_process_add(&acquire_proc);
 
 	if (b)
 		blobmsg_add_string(b, "task_id", acquire_task);
@@ -229,7 +205,7 @@ void mesh_ctrl_self_update(struct blob_buf *b)
 void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 {
 	char path[128], *data, *line, *save;
-	bool running = acquire_busy() && !strcmp(task, acquire_task);
+	bool running = acquire_job.busy && !strcmp(task, acquire_task);
 	bool terminal = false;
 	struct stat st;
 	void *steps;
@@ -284,11 +260,6 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 	free(data);
 }
 
-static void poll_done(struct uloop_process *p, int ret)
-{
-	poll_busy = false;
-}
-
 static void gen_hex(char *out, size_t bytes)
 {
 	unsigned char buf[32];
@@ -321,130 +292,100 @@ void mesh_uci_section(struct uci_context *ctx, struct uci_package *pkg)
 
 void mesh_ctrl_ensure_id(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 
 	if (mesh.role != MESH_CONTROLLER || mesh.controller_id[0])
 		return;
 
 	gen_hex(mesh.controller_id, 8);
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "roamd"))
 		return;
 
-	if (uci_load(ctx, "roamd", &pkg) == UCI_OK) {
-		mesh_uci_section(ctx, pkg);
-		mesh_uci_set(ctx, "roamd", "mesh", "controller_id", mesh.controller_id);
-		uci_commit(ctx, &pkg, false);
-	}
-
-	uci_free_context(ctx);
+	mesh_uci_section(u.ctx, u.pkg);
+	uci_session_set(&u, "mesh", "controller_id", mesh.controller_id);
+	uci_session_close(&u);
 }
 
 void mesh_ctrl_bridge_stp(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_element *e;
 	uint32_t id;
-	bool changed = false;
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (mesh.role != MESH_CONTROLLER || list_empty(&mesh_members))
 		return;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "network"))
 		return;
 
-	if (uci_load(ctx, "network", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
-
-	uci_foreach_element(&pkg->sections, e) {
+	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
-		const char *type = uci_lookup_option_string(ctx, s, "type");
-		const char *stp = uci_lookup_option_string(ctx, s, "stp");
-		struct uci_ptr ptr = {
-			.package = "network", .section = s->e.name,
-			.option = "stp", .value = "1",
-		};
+		const char *type = uci_lookup_option_string(u.ctx, s, "type");
+		const char *stp = uci_lookup_option_string(u.ctx, s, "stp");
 
 		if (strcmp(s->type, "device") || !type || strcmp(type, "bridge"))
 			continue;
 		if (stp && !strcmp(stp, "1"))
 			continue;
 
-		uci_set(ctx, &ptr);
-		changed = true;
+		uci_session_set(&u, s->e.name, "stp", "1");
 	}
 
-	if (changed) {
-		uci_commit(ctx, &pkg, false);
-		if (!ubus_lookup_id(ubus_ctx, "network", &id))
-			ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
+	if (u.dirty && !ubus_lookup_id(ubus_ctx, "network", &id)) {
+		uci_session_close(&u);
+		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
+		return;
 	}
 
-	uci_free_context(ctx);
+	uci_session_close(&u);
 }
 
 void mesh_ctrl_backhaul_apply(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *rp = NULL, *wp = NULL;
+	bool want = mesh.backhaul_enabled && !list_empty(&mesh_members);
+	struct uci_session u;
 	struct uci_element *e;
-	bool changed = false;
+	uint32_t id;
 
 	if (mesh.role != MESH_CONTROLLER)
 		return;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "roamd"))
 		return;
 
-	if (uci_load(ctx, "roamd", &rp) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
-
-	mesh_uci_section(ctx, rp);
-
-	if (!mesh.backhaul_ssid[0]) {
-		snprintf(mesh.backhaul_ssid, sizeof(mesh.backhaul_ssid),
-			 "Service-Mesh-%.6s", mesh.controller_id);
-		mesh_uci_set(ctx, "roamd", "mesh", "backhaul_ssid", mesh.backhaul_ssid);
-		changed = true;
-	}
-
-	if (!mesh.backhaul_key[0]) {
-		gen_hex(mesh.backhaul_key, 12);
-		mesh_uci_set(ctx, "roamd", "mesh", "backhaul_key", mesh.backhaul_key);
-		changed = true;
-	}
+	mesh_uci_section(u.ctx, u.pkg);
 
 	if (!mesh.ft_key[0]) {
 		gen_hex(mesh.ft_key, 16);
-		mesh_uci_set(ctx, "roamd", "mesh", "ft_key", mesh.ft_key);
-		changed = true;
+		uci_session_set(&u, "mesh", "ft_key", mesh.ft_key);
 	}
 
-	if (changed)
-		uci_commit(ctx, &rp, false);
+	if (want && !mesh.backhaul_ssid[0]) {
+		snprintf(mesh.backhaul_ssid, sizeof(mesh.backhaul_ssid),
+			 "Service-Mesh-%.6s", mesh.controller_id);
+		uci_session_set(&u, "mesh", "backhaul_ssid", mesh.backhaul_ssid);
+	}
 
-	if (uci_load(ctx, "wireless", &wp) != UCI_OK) {
-		uci_free_context(ctx);
+	if (want && !mesh.backhaul_key[0]) {
+		gen_hex(mesh.backhaul_key, 12);
+		uci_session_set(&u, "mesh", "backhaul_key", mesh.backhaul_key);
+	}
+
+	uci_session_close(&u);
+
+	if (!uci_session_open(&u, "wireless"))
 		return;
-	}
 
-	if (uci_lookup_section(ctx, wp, "mesh_backhaul")) {
+	if (uci_lookup_section(u.ctx, u.pkg, "mesh_backhaul")) {
 		struct uci_ptr ptr = { .package = "wireless", .section = "mesh_backhaul" };
 
-		if (uci_lookup_ptr(ctx, &ptr, NULL, false) == UCI_OK)
-			uci_delete(ctx, &ptr);
+		if (uci_lookup_ptr(u.ctx, &ptr, NULL, false) == UCI_OK &&
+		    uci_delete(u.ctx, &ptr) == UCI_OK)
+			u.dirty = true;
 	}
 
-	uci_foreach_element(&wp->sections, e) {
+	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
 		char name[MESH_NAME_MAX];
 
@@ -453,46 +394,53 @@ void mesh_ctrl_backhaul_apply(void)
 
 		snprintf(name, sizeof(name), "%s%s", MESH_BH_PREFIX, s->e.name);
 
-		if (!uci_lookup_section(ctx, wp, name)) {
+		if (!uci_lookup_section(u.ctx, u.pkg, name)) {
 			struct uci_section *ns = NULL;
 
-			uci_add_section(ctx, wp, "wifi-iface", &ns);
+			if (!want)
+				continue;
+
+			uci_add_section(u.ctx, u.pkg, "wifi-iface", &ns);
 			if (!ns)
 				continue;
 
-			uci_rename(ctx, &(struct uci_ptr){
+			uci_rename(u.ctx, &(struct uci_ptr){
 				.package = "wireless", .section = ns->e.name,
 				.value = name });
+			u.dirty = true;
 		}
 
-		mesh_uci_set(ctx, "wireless", name, "device", s->e.name);
-		mesh_uci_set(ctx, "wireless", name, "mode", "ap");
-		mesh_uci_set(ctx, "wireless", name, "network", "lan");
-		mesh_uci_set(ctx, "wireless", name, "hidden", "1");
-		mesh_uci_set(ctx, "wireless", name, "wds", "1");
-		mesh_uci_set(ctx, "wireless", name, "encryption", "psk2");
-		mesh_uci_set(ctx, "wireless", name, "ssid", mesh.backhaul_ssid);
-		mesh_uci_set(ctx, "wireless", name, "key", mesh.backhaul_key);
-		mesh_uci_set(ctx, "wireless", name, "disabled",
-			    mesh.backhaul_enabled ? "0" : "1");
+		if (!want) {
+			if (!roam_uci_bool(uci_lookup_option_string(u.ctx,
+					uci_lookup_section(u.ctx, u.pkg, name), "disabled")))
+				uci_session_set(&u, name, "disabled", "1");
+			continue;
+		}
+
+		uci_session_set(&u, name, "device", s->e.name);
+		uci_session_set(&u, name, "mode", "ap");
+		uci_session_set(&u, name, "network", "lan");
+		uci_session_set(&u, name, "hidden", "1");
+		uci_session_set(&u, name, "wds", "1");
+		uci_session_set(&u, name, "encryption", "psk2");
+		uci_session_set(&u, name, "ssid", mesh.backhaul_ssid);
+		uci_session_set(&u, name, "key", mesh.backhaul_key);
+		uci_session_set(&u, name, "disabled", "0");
 	}
 
-	uci_commit(ctx, &wp, false);
-	uci_free_context(ctx);
+	if (u.dirty && !ubus_lookup_id(ubus_ctx, "network", &id)) {
+		uci_session_close(&u);
+		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
+		return;
+	}
+
+	uci_session_close(&u);
 }
 
 static void poll_cb(struct uloop_timeout *t)
 {
-	if (!poll_busy && !list_empty(&mesh_members)) {
-		pid_t pid = mesh_spawn(MESH_POLL, "monitor", NULL);
-
-		if (pid > 0) {
-			poll_proc.pid = pid;
-			poll_proc.cb = poll_done;
-			uloop_process_add(&poll_proc);
-			poll_busy = true;
-		}
-	}
+	if (!list_empty(&mesh_members))
+		mesh_task_start(&poll_job, MESH_POLL, "monitor", NULL);
 
 	uloop_timeout_set(&poll_timer, MESH_POLL_INTERVAL);
 }
@@ -552,7 +500,7 @@ static void autoupdate_cb(struct uloop_timeout *t)
 		return;
 	}
 
-	if (acquire_busy()) {
+	if (acquire_job.busy) {
 		uloop_timeout_set(t, AUTOUPDATE_BUSY_RETRY);
 		return;
 	}
@@ -572,26 +520,22 @@ void mesh_ctrl_autoupdate_arm(void)
 	uloop_timeout_set(&autoupdate_timer, AUTOUPDATE_SETTLE);
 }
 
-static void sync_done(struct uloop_process *p, int ret)
+static void sync_done(struct mesh_task *task, int ret)
 {
-	sync_busy = false;
+	if (!sync_pending)
+		return;
+
+	sync_pending = false;
+	mesh_ctrl_sync();
 }
 
 void mesh_ctrl_sync(void)
 {
-	pid_t pid;
-
-	if (mesh.role != MESH_CONTROLLER || sync_busy || list_empty(&mesh_members))
+	if (mesh.role != MESH_CONTROLLER || list_empty(&mesh_members))
 		return;
 
-	pid = mesh_spawn(MESH_POLL, "force", NULL);
-	if (pid <= 0)
-		return;
-
-	sync_proc.pid = pid;
-	sync_proc.cb = sync_done;
-	uloop_process_add(&sync_proc);
-	sync_busy = true;
+	if (!mesh_task_start(&sync_job, MESH_POLL, "force", NULL))
+		sync_pending = true;
 }
 
 void mesh_ctrl_poll_start(void)
@@ -625,85 +569,43 @@ void mesh_member_live(const char *id, struct blob_buf *b)
 
 bool mesh_member_rename(const char *id, const char *name)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
-	struct uci_element *e;
-	bool done = false;
+	struct uci_session u;
+	struct uci_section *sec;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "roamd"))
 		return false;
 
-	if (uci_load(ctx, "roamd", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return false;
-	}
+	sec = uci_session_find(&u, "member", "id", id);
+	if (sec)
+		uci_session_set(&u, sec->e.name, "name", name);
 
-	uci_foreach_element(&pkg->sections, e) {
-		struct uci_section *s = uci_to_section(e);
-		const char *sid;
-		struct uci_ptr ptr = {
-			.package = "roamd", .section = s->e.name,
-			.option = "name", .value = name,
-		};
+	uci_session_close(&u);
 
-		if (strcmp(s->type, "member"))
-			continue;
-		sid = uci_lookup_option_string(ctx, s, "id");
-		if (sid && !strcmp(sid, id)) {
-			uci_set(ctx, &ptr);
-			uci_commit(ctx, &pkg, false);
-			done = true;
-			break;
-		}
-	}
-
-	uci_free_context(ctx);
-
-	if (done)
+	if (sec)
 		roam_config_load();
 
-	return done;
+	return sec != NULL;
 }
 
 bool mesh_member_remove(const char *id)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
-	struct uci_element *e;
-	char *name = NULL;
+	struct uci_session u;
+	struct uci_section *sec;
+	struct uci_ptr ptr = { .package = "roamd" };
 	bool removed = false;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "roamd"))
 		return false;
 
-	if (uci_load(ctx, "roamd", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return false;
-	}
+	sec = uci_session_find(&u, "member", "id", id);
+	if (sec) {
+		ptr.section = sec->e.name;
 
-	uci_foreach_element(&pkg->sections, e) {
-		struct uci_section *s = uci_to_section(e);
-		const char *sid;
-
-		if (strcmp(s->type, "member"))
-			continue;
-		sid = uci_lookup_option_string(ctx, s, "id");
-		if (sid && !strcmp(sid, id)) {
-			name = strdup(s->e.name);
-			break;
-		}
-	}
-
-	if (name) {
-		struct uci_ptr ptr = { .package = "roamd", .section = name };
-
-		if (uci_lookup_ptr(ctx, &ptr, NULL, false) == UCI_OK &&
-		    uci_delete(ctx, &ptr) == UCI_OK) {
+		if (uci_lookup_ptr(u.ctx, &ptr, NULL, false) == UCI_OK &&
+		    uci_delete(u.ctx, &ptr) == UCI_OK) {
 			char path[128];
 
-			uci_commit(ctx, &pkg, false);
+			u.dirty = true;
 			snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
 			unlink(path);
 			snprintf(path, sizeof(path), "/etc/roamd/members/%s.crt", id);
@@ -712,13 +614,14 @@ bool mesh_member_remove(const char *id)
 			unlink(path);
 			removed = true;
 		}
-		free(name);
 	}
 
-	uci_free_context(ctx);
+	uci_session_close(&u);
 
-	if (removed)
+	if (removed) {
 		roam_config_load();
+		mesh_ctrl_backhaul_apply();
+	}
 
 	return removed;
 }

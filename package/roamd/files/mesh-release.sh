@@ -3,11 +3,10 @@
 
 ID="$1"
 TASK="$2"
-STATE="${ACQUIRE_DIR}/${TASK}"
 
-acquire_dir_trim
+task_open "$TASK"
 
-report() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$STATE"; }
+
 
 member_addr() {
 	local sect

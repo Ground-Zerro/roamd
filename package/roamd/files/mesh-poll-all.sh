@@ -8,29 +8,23 @@ mkdir -p "$MEMBERS_DIR"
 
 profile=$(/usr/libexec/roamd/mesh-profile.sh)
 
-ctrl_ap_field() {
-	local f="$1" sect
-	for sect in $(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
-		case "$sect" in mesh_bh_*) continue;; esac
-		[ "$(uci -q get "wireless.$sect.mode")" = "ap" ] || continue
-		uci -q get "wireless.$sect.$f"
-		return
-	done
-}
-
-c_ssid=$(ctrl_ap_field ssid)
-c_enc=$(ctrl_ap_field encryption)
-c_md=$(ctrl_ap_field mobility_domain)
-c_ft=$(ctrl_ap_field ieee80211r)
+ap_section_find
+c_ssid=$(ap_field ssid)
+c_enc=$(ap_field encryption)
+c_md=$(ap_field mobility_domain)
+c_ft=$(ap_field ieee80211r)
 c_bh=$(uci -q get roamd.mesh.backhaul_ssid)
 
-for sect in $(member_sections); do
+members=$(member_sections)
+
+for sect in $members; do
 	id=$(uci -q get "roamd.$sect.id")
 	addr=$(uci -q get "roamd.$sect.addr")
 	managed=$(uci -q get "roamd.$sect.managed")
 	[ -n "$id" ] && [ -n "$addr" ] || continue
 
 	was_online=$(jsonfilter -e '@.online' < "$MEMBERS_DIR/$id.json" 2>/dev/null)
+	was_cons=$(jsonfilter -e '@.consistency' < "$MEMBERS_DIR/$id.json" 2>/dev/null)
 
 	session=$(rpc_login "$addr" "$id")
 	if [ -z "$session" ]; then
@@ -38,7 +32,8 @@ for sect in $(member_sections); do
 		continue
 	fi
 
-	if [ "$managed" != "0" ] && { [ "$mode" = "force" ] || [ "$was_online" != "true" ]; }; then
+	if [ "$managed" != "0" ] && { [ "$mode" = "force" ] || [ "$was_online" != "true" ] ||
+		{ [ -n "$was_cons" ] && [ "$was_cons" != "ok" ]; }; }; then
 		rpc_call "$addr" "$session" roamd mesh_apply "$profile" "$id" >/dev/null 2>&1
 	fi
 
@@ -90,7 +85,9 @@ for sect in $(member_sections); do
 	fi
 done
 
-steer_diff=$(uci -q get roamd.policy.rssi_diff); steer_diff=${steer_diff:-30}
+cfg=$(ubus -t 3 call roamd config 2>/dev/null)
+steer_diff=$(printf '%s' "$cfg" | jsonfilter -e '@.rssi_diff' 2>/dev/null); steer_diff=${steer_diff:-30}
+prefer=$(printf '%s' "$cfg" | jsonfilter -e '@.prefer_band' 2>/dev/null)
 seen=/tmp/roamd-steer.$$
 : > "$seen"
 
@@ -115,7 +112,7 @@ ubus call roamd mesh_report > "$self_report" 2>/dev/null &&
 	collect_seen "$self_report" controller local
 rm -f "$self_report"
 
-for sect in $(member_sections); do
+for sect in $members; do
 	id=$(uci -q get "roamd.$sect.id")
 	addr=$(uci -q get "roamd.$sect.addr")
 	[ -n "$id" ] && [ -f "$MEMBERS_DIR/$id.json" ] || continue
@@ -125,9 +122,11 @@ done
 
 node_in() { local a; for a in $2; do [ "$a" = "$1" ] && return 0; done; return 1; }
 
+devices=$(uci -q show roamd | sed -n 's/^roamd\.\(@device\[[0-9]*\]\|[a-z0-9_]*\)=device$/\1/p')
+
 allowed_nodes_for() {
 	local want="$1" sect m
-	for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@device\[[0-9]*\]\|[a-z0-9_]*\)=device$/\1/p'); do
+	for sect in $devices; do
 		m=$(uci -q get "roamd.$sect.mac" | tr 'A-Z' 'a-z')
 		[ "$m" = "$want" ] && { uci -q get "roamd.$sect.node"; return; }
 	done
@@ -143,14 +142,19 @@ for mac in $(awk '{print $1}' "$seen" | sort -u); do
 	best_id=$(echo "$best" | awk '{print $2}')
 	best_sig=$(echo "$best" | awk '{print $4}')
 
-	neigh=""; j=0
-	while :; do
+	neigh=""; any=""; j=0
+	while [ -f "$MEMBERS_DIR/$best_id.json" ]; do
 		bj=$(jsonfilter -e "@.aps[$j].bssid" < "$MEMBERS_DIR/$best_id.json" 2>/dev/null)
 		[ -n "$bj" ] || break
 		nr=$(jsonfilter -e "@.aps[$j].nr" < "$MEMBERS_DIR/$best_id.json" 2>/dev/null)
-		[ -n "$nr" ] && neigh="$neigh${neigh:+,}\"$nr\""
+		bnd=$(jsonfilter -e "@.aps[$j].band" < "$MEMBERS_DIR/$best_id.json" 2>/dev/null)
+		if [ -n "$nr" ]; then
+			any="$any${any:+,}\"$nr\""
+			[ "$bnd" = "$prefer" ] && neigh="$neigh${neigh:+,}\"$nr\""
+		fi
 		j=$((j + 1))
 	done
+	[ -n "$neigh" ] || neigh="$any"
 
 	grep "^$mac " "$seen" | while read -r m cid caddr csig ckind; do
 		[ "$ckind" = "clients" ] || continue
@@ -203,7 +207,7 @@ add_aps() {
 }
 
 add_aps "$ms" self_aps
-for sect in $(member_sections); do
+for sect in $members; do
 	id=$(uci -q get "roamd.$sect.id")
 	[ -n "$id" ] && [ -f "$MEMBERS_DIR/$id.json" ] && add_aps "$MEMBERS_DIR/$id.json" aps
 done
@@ -213,7 +217,7 @@ rm -f "$ms"
 
 if [ "$nb" -gt 0 ]; then
 	ubus -t 3 call roamd mesh_neighbors "$payload" >/dev/null 2>&1
-	for sect in $(member_sections); do
+	for sect in $members; do
 		id=$(uci -q get "roamd.$sect.id")
 		addr=$(uci -q get "roamd.$sect.addr")
 		[ -n "$id" ] && [ -n "$addr" ] || continue

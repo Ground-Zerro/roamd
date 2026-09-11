@@ -90,17 +90,18 @@ struct roam_config {
 	uint32_t kick_delay;
 	uint32_t steer_retries;
 	uint32_t beacon_req_interval;
-	uint32_t log_level;
+	int log_level;
 };
 
 struct roam_bss {
 	struct avl_node avl;
 	struct ubus_subscriber sub;
-	struct ubus_request req;
 	struct uloop_timeout poll;
 	struct list_head list;
 
 	uint32_t obj_id;
+	uint32_t nr_sent;
+	uint64_t nr_sent_at;
 	char ifname[IFNAMSIZ];
 	char ssid[ROAMD_SSID_MAX];
 	uint8_t bssid[6];
@@ -163,6 +164,7 @@ void roam_device_setup(void);
 enum roam_lock roam_device_lock(const uint8_t *addr);
 bool roam_device_node_allowed(const uint8_t *addr, const char *node_id);
 void roam_config_load(void);
+void roam_config_dump(struct blob_buf *b);
 
 bool roam_uci_bool(const char *value);
 void roam_wireless_apply(void);

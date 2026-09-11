@@ -2,17 +2,14 @@
 . /usr/libexec/roamd/mesh-lib.sh
 
 TASK="$2"
-STATE="$ACQUIRE_DIR/$TASK"
 
-acquire_dir_trim
-report() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$STATE"; }
-fail() { report update error "$1"; exit 1; }
+task_open "$TASK"
 
-: > "$STATE"
+
 report update progress "installing packages on the controller"
 
-sys_retry 3 5 sys_index_update || fail "package index is not available"
-self_upgrade || fail "package installation failed"
+sys_retry 3 5 sys_index_update || fail update "package index is not available"
+self_upgrade || fail update "package installation failed"
 
 report done ok updated
 

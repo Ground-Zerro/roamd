@@ -16,6 +16,25 @@ diag_log() {
 ACQUIRE_DIR="/var/run/roamd/acquire"
 ACQUIRE_KEEP=5
 
+task_attach() {
+	TASK_STATE="$ACQUIRE_DIR/$1"
+}
+
+task_open() {
+	task_attach "$1"
+	acquire_dir_trim
+	: > "$TASK_STATE"
+}
+
+report() {
+	printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$TASK_STATE"
+}
+
+fail() {
+	report "$1" error "$2"
+	exit 1
+}
+
 acquire_dir_trim() {
 	mkdir -p "$ACQUIRE_DIR"
 	ls -t "$ACQUIRE_DIR" 2>/dev/null | grep -v '\.mac$' | tail -n +$((ACQUIRE_KEEP + 1)) | while read -r old; do
@@ -408,6 +427,41 @@ install_roamd_pkg() {
 }
 
 MEMBERS_DIR="/var/run/roamd/members"
+
+ensure_curl() {
+	command -v curl >/dev/null 2>&1 && return 0
+
+	sys_retry 2 5 sys_index_update || return 1
+	sys_add curl >/dev/null 2>&1
+	command -v curl >/dev/null 2>&1 || return 1
+
+	logger -t roamd "mesh: curl installed for the control channel"
+	diag_log "curl installed for the mesh control channel"
+
+	return 0
+}
+
+AP_SECTION=""
+
+ap_section_find() {
+	local sect
+
+	[ -z "$AP_SECTION" ] || return 0
+
+	for sect in $(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
+		case "$sect" in mesh_bh_*) continue;; esac
+		[ "$(uci -q get "wireless.$sect.mode")" = "ap" ] || continue
+		AP_SECTION="$sect"
+		return 0
+	done
+
+	return 1
+}
+
+ap_field() {
+	[ -n "$AP_SECTION" ] || return 0
+	uci -q get "wireless.$AP_SECTION.$1"
+}
 
 member_sections() {
 	uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'

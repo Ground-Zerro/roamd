@@ -5,6 +5,7 @@
 #include <uci.h>
 #include <libubox/list.h>
 #include <libubox/blobmsg.h>
+#include <libubox/uloop.h>
 
 #define MESH_SSID_MAX		33
 #define MESH_KEY_MAX		65
@@ -130,7 +131,15 @@ bool mesh_parent_mac(uint8_t *out);
 #define MESH_DEPS_SCRIPT	"/usr/libexec/roamd/deps-ensure.sh"
 #define MESH_DEPS_STATE		"/tmp/roamd/deps"
 
+struct mesh_task {
+	struct uloop_process proc;
+	bool busy;
+	void (*done)(struct mesh_task *task, int ret);
+};
+
 pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2);
+bool mesh_task_start(struct mesh_task *task, const char *script,
+		     const char *arg1, const char *arg2);
 void mesh_deps_start(void);
 void mesh_deps_blob(struct blob_buf *b);
 
@@ -163,6 +172,20 @@ void mesh_ctrl_autoupdate_arm(void);
 void mesh_ctrl_sync(void);
 void mesh_uci_set(struct uci_context *ctx, const char *pkg, const char *sect,
 		  const char *opt, const char *val);
+
+struct uci_session {
+	struct uci_context *ctx;
+	struct uci_package *pkg;
+	const char *name;
+	bool dirty;
+};
+
+bool uci_session_open(struct uci_session *s, const char *package);
+struct uci_section *uci_session_find(struct uci_session *s, const char *type,
+				     const char *option, const char *value);
+void uci_session_set(struct uci_session *s, const char *section,
+		     const char *option, const char *value);
+void uci_session_close(struct uci_session *s);
 void mesh_uci_section(struct uci_context *ctx, struct uci_package *pkg);
 void mesh_ctrl_ensure_id(void);
 void mesh_ctrl_backhaul_apply(void);
@@ -185,7 +208,6 @@ void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band,
 		    enum mesh_event_type type);
 void mesh_log_push(const struct mesh_event *ev);
 void mesh_log_dump(struct blob_buf *b, unsigned int limit);
-void mesh_log_since(struct blob_buf *b, uint32_t after);
 void mesh_log_merge(const char *node, const char *mac, uint32_t ts,
 		    const char *from_band, const char *to_band, const char *type);
 void mesh_log_ingest(const char *node, struct blob_attr *events);

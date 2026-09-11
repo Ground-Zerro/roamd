@@ -1,17 +1,38 @@
 #!/bin/sh
 . /usr/share/libubox/jshn.sh
+. /usr/libexec/roamd/mesh-lib.sh
 
 g() { uci -q get "roamd.$1"; }
 
-ap_field() {
-	local f="$1" sect
-	for sect in $(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
-		case "$sect" in mesh_bh_*) continue;; esac
-		[ "$(uci -q get "wireless.$sect.mode")" = "ap" ] || continue
-		uci -q get "wireless.$sect.$f"
-		return
+GLOBAL_OPTS="ssid mobility_domain band_steering prefer_band fast_transition ft_over_ds
+	neighbor_reports bss_transition"
+POLICY_OPTS="rssi_good rssi_low rssi_diff kick_rssi cross_band_delta hold_time age_time
+	check_time_low check_time_high poll_interval deny_time deny_probe allow_kick
+	kick_delay steer_retries beacon_req_interval log_level"
+
+cfg_ready=""
+if json_load "$(ubus -t 3 call roamd config 2>/dev/null)" 2>/dev/null; then
+	cfg_ready=1
+	for o in $GLOBAL_OPTS $POLICY_OPTS; do
+		json_get_var v "$o"
+		eval "cfg_$o=\"\$v\""
 	done
+fi
+
+emit() {
+	local v
+
+	if [ -n "$cfg_ready" ]; then
+		eval "v=\$cfg_$2"
+		json_add_string "$2" "$v"
+		return
+	fi
+
+	v=$(g "$1.$2")
+	[ -n "$v" ] && json_add_string "$2" "$v"
 }
+
+ap_section_find
 
 json_init
 json_add_string controller_id "$(g mesh.controller_id)"
@@ -38,18 +59,14 @@ fi
 json_close_object
 
 json_add_object global
-for o in ssid mobility_domain band_steering prefer_band fast_transition ft_over_ds neighbor_reports bss_transition; do
-	v=$(g "global.$o")
-	[ -n "$v" ] && json_add_string "$o" "$v"
+for o in $GLOBAL_OPTS; do
+	emit global "$o"
 done
 json_close_object
 
 json_add_object policy
-for o in rssi_good rssi_low rssi_diff kick_rssi cross_band_delta hold_time age_time \
-	 check_time_low check_time_high poll_interval deny_time deny_probe allow_kick \
-	 kick_delay steer_retries beacon_req_interval log_level; do
-	v=$(g "policy.$o")
-	[ -n "$v" ] && json_add_string "$o" "$v"
+for o in $POLICY_OPTS; do
+	emit policy "$o"
 done
 json_close_object
 

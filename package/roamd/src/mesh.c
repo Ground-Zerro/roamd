@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <netinet/ether.h>
 #include <libubox/uloop.h>
 
@@ -13,10 +14,10 @@
 #define MESH_DEPS_FIRST		5000
 #define MESH_DEPS_RETRY		300000
 
-static struct uloop_process deps_proc;
 static struct uloop_timeout deps_timer;
-static bool deps_busy;
 static bool deps_ready;
+static void deps_done(struct mesh_task *task, int ret);
+static struct mesh_task deps_job = { .done = deps_done };
 
 pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2)
 {
@@ -37,9 +38,39 @@ pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2)
 	return pid;
 }
 
-static void deps_done(struct uloop_process *p, int ret)
+static void mesh_task_done(struct uloop_process *p, int ret)
 {
-	deps_busy = false;
+	struct mesh_task *task = container_of(p, struct mesh_task, proc);
+
+	task->busy = false;
+	task->proc.pid = 0;
+
+	if (task->done)
+		task->done(task, ret);
+}
+
+bool mesh_task_start(struct mesh_task *task, const char *script,
+		     const char *arg1, const char *arg2)
+{
+	pid_t pid;
+
+	if (task->busy)
+		return false;
+
+	pid = mesh_spawn(script, arg1, arg2);
+	if (pid <= 0)
+		return false;
+
+	task->proc.pid = pid;
+	task->proc.cb = mesh_task_done;
+	uloop_process_add(&task->proc);
+	task->busy = true;
+
+	return true;
+}
+
+static void deps_done(struct mesh_task *task, int ret)
+{
 	deps_ready = ret == 0;
 
 	if (!deps_ready)
@@ -48,18 +79,11 @@ static void deps_done(struct uloop_process *p, int ret)
 
 static void deps_cb(struct uloop_timeout *t)
 {
-	if (deps_busy)
+	if (deps_job.busy)
 		return;
 
-	deps_proc.pid = mesh_spawn(MESH_DEPS_SCRIPT, NULL, NULL);
-	if (deps_proc.pid <= 0) {
+	if (!mesh_task_start(&deps_job, MESH_DEPS_SCRIPT, NULL, NULL))
 		uloop_timeout_set(&deps_timer, MESH_DEPS_RETRY);
-		return;
-	}
-
-	deps_busy = true;
-	deps_proc.cb = deps_done;
-	uloop_process_add(&deps_proc);
 }
 
 void mesh_deps_start(void)
@@ -87,20 +111,25 @@ void mesh_deps_blob(struct blob_buf *b)
 
 char *mesh_slurp(const char *path, size_t max)
 {
+	struct stat st;
 	char *buf;
 	int fd, n;
+	size_t size = max;
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		return NULL;
 
-	buf = malloc(max + 1);
+	if (!fstat(fd, &st) && st.st_size >= 0 && (size_t)st.st_size < size)
+		size = st.st_size;
+
+	buf = malloc(size + 1);
 	if (!buf) {
 		close(fd);
 		return NULL;
 	}
 
-	n = read(fd, buf, max);
+	n = read(fd, buf, size);
 	close(fd);
 	if (n < 0) {
 		free(buf);
@@ -623,6 +652,67 @@ void mesh_config_apply(struct uci_context *ctx, struct uci_section *s)
 
 	if (!mesh.pkg_url[0])
 		snprintf(mesh.pkg_url, sizeof(mesh.pkg_url), "%s", MESH_PKG_URL_DEFAULT);
+}
+
+bool uci_session_open(struct uci_session *s, const char *package)
+{
+	s->pkg = NULL;
+	s->name = package;
+	s->dirty = false;
+
+	s->ctx = uci_alloc_context();
+	if (!s->ctx)
+		return false;
+
+	if (uci_load(s->ctx, package, &s->pkg) != UCI_OK) {
+		uci_free_context(s->ctx);
+		s->ctx = NULL;
+		return false;
+	}
+
+	return true;
+}
+
+struct uci_section *uci_session_find(struct uci_session *s, const char *type,
+				     const char *option, const char *value)
+{
+	struct uci_element *e;
+
+	uci_foreach_element(&s->pkg->sections, e) {
+		struct uci_section *sec = uci_to_section(e);
+		const char *v;
+
+		if (strcmp(sec->type, type))
+			continue;
+
+		if (!option)
+			return sec;
+
+		v = uci_lookup_option_string(s->ctx, sec, option);
+		if (v && !strcmp(v, value))
+			return sec;
+	}
+
+	return NULL;
+}
+
+void uci_session_set(struct uci_session *s, const char *section,
+		     const char *option, const char *value)
+{
+	mesh_uci_set(s->ctx, s->name, section, option, value);
+	s->dirty = true;
+}
+
+void uci_session_close(struct uci_session *s)
+{
+	if (!s->ctx)
+		return;
+
+	if (s->dirty)
+		uci_commit(s->ctx, &s->pkg, false);
+
+	uci_free_context(s->ctx);
+	s->ctx = NULL;
 }
 
 void mesh_uci_set(struct uci_context *ctx, const char *pkg, const char *sect,

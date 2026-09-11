@@ -4,12 +4,10 @@
 
 ADDR="$1"
 TASK="$2"
-STATE="/var/run/roamd/acquire/${TASK}"
 
-acquire_dir_trim
+task_open "$TASK"
 
-report() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$STATE"; }
-fail() { report "$1" error "$2"; exit 1; }
+
 
 controller_addr_for() {
 	local target="$1" net3="${1%.*}"
@@ -28,7 +26,7 @@ controller_addr_for() {
 register_member() {
 	local id="$1" mac="$2" addr="$3" hostname="$4" sect found=""
 
-	for sect in $(uci -q show roamd | sed -n 's/^roamd\.\(@member\[[0-9]*\]\|[a-z0-9_]*\)=member$/\1/p'); do
+	for sect in $(member_sections); do
 		[ "$(uci -q get roamd.$sect.mac)" = "$mac" ] && found="$sect"
 	done
 
@@ -42,7 +40,6 @@ register_member() {
 	uci commit roamd
 }
 
-: > "$STATE"
 
 ensure_ssh_key
 node_forget "$ADDR"
@@ -65,7 +62,7 @@ mac=$(node_ssh "$ADDR" "
 	dev=\$($dev_probe)
 	cat /sys/class/net/\$dev/address 2>/dev/null")
 mac=$(echo "$mac" | tr -d '\r\n ')
-[ -n "$mac" ] && printf '%s\n' "$mac" > "${STATE}.mac"
+[ -n "$mac" ] && printf '%s\n' "$mac" > "${TASK_STATE}.mac"
 
 branch="${version%.*}"
 [ -n "$branch" ] || fail compat "unknown OpenWrt version"
@@ -299,6 +296,8 @@ if [ -n "$pubkey" ]; then
 		report enroll progress "service key was not installed, password login left enabled on the node"
 	fi
 fi
+
+ensure_curl || fail install "curl cannot be installed — no control channel to the node"
 
 register_member "$member_id" "$mac" "$ADDR" "${hostname:-OpenWrt}"
 ubus -t 3 call roamd reload >/dev/null 2>&1

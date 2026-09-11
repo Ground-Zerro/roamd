@@ -4,12 +4,10 @@
 
 ADDR="$1"
 TASK="$2"
-STATE="$ACQUIRE_DIR/$TASK"
 
-acquire_dir_trim
-report() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$STATE"; }
+task_open "$TASK"
 
-: > "$STATE"
+
 report update progress "updating roamd on the node"
 
 node_update "$ADDR" "$(member_id_by_addr "$ADDR")"
