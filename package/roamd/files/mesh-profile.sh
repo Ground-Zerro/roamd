@@ -8,7 +8,7 @@ GLOBAL_OPTS="ssid mobility_domain band_steering prefer_band fast_transition ft_o
 	neighbor_reports bss_transition"
 POLICY_OPTS="rssi_good rssi_low rssi_diff kick_rssi cross_band_delta hold_time age_time
 	check_time_low check_time_high poll_interval deny_time deny_probe allow_kick
-	kick_delay steer_retries beacon_req_interval log_level"
+	steer_retries beacon_req_interval log_level"
 
 cfg_ready=""
 if json_load "$(ubus -t 3 call roamd config 2>/dev/null)" 2>/dev/null; then
@@ -71,7 +71,7 @@ done
 json_close_object
 
 json_add_object backhaul
-for o in backhaul_enabled backhaul_ssid backhaul_key ft_key wifi_shutdown; do
+for o in backhaul_enabled backhaul_ssid backhaul_key ft_key wifi_shutdown backhaul_delta backhaul_min_signal; do
 	v=$(g "mesh.$o")
 	[ -n "$v" ] && json_add_string "$o" "$v"
 done

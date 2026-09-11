@@ -9,7 +9,7 @@
 #define BTM_MBO_REASON		5
 #define BTM_CELL_PREF		0
 #define KICK_REASON		5
-#define STEER_GIVE_UP		900000
+#define STEER_RETRY_INTERVAL	5000
 
 static struct blob_buf b;
 
@@ -159,8 +159,7 @@ static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, s
 	roam_bss_invoke(from, "rrm_beacon_req", &b);
 }
 
-static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to,
-		       bool imminent)
+static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to)
 {
 	const char *nr = bss_nr_string(to);
 	void *list;
@@ -168,10 +167,9 @@ static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_
 	blob_buf_init(&b, 0);
 	blobmsg_add_string(&b, "addr", sta->mac);
 	blobmsg_add_u32(&b, "dialog_token", ++sta->dialog_token);
-	blobmsg_add_u8(&b, "disassociation_imminent", imminent);
-
+	blobmsg_add_u8(&b, "disassociation_imminent", 0);
 	blobmsg_add_u32(&b, "disassociation_timer", 0);
-	blobmsg_add_u32(&b, "reassoc_delay", imminent ? config.kick_delay / 100 : 0);
+	blobmsg_add_u32(&b, "reassoc_delay", 0);
 
 	blobmsg_add_u8(&b, "abridged", 1);
 	blobmsg_add_u32(&b, "validity_period", BTM_VALIDITY_PERIOD);
@@ -191,8 +189,9 @@ static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_
 
 	mesh_log_local(sta->mac, from->band, to->band, MESH_EV_STEER);
 
-	roam_log(ROAM_L_INFO, "roamd: steering %s from %s GHz to %s GHz (attempt %u)",
-		 sta->mac, roam_band_name(from->band), roam_band_name(to->band), sta->steer_count);
+	roam_log(ROAM_L_INFO, "roamd: steering %s from %s GHz to %s GHz (attempt %u of %u)",
+		 sta->mac, roam_band_name(from->band), roam_band_name(to->band),
+		 sta->steer_count, config.steer_retries);
 }
 
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
@@ -215,17 +214,12 @@ void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
 	roam_sta_reset(sta);
 }
 
-void roam_policy_btm_response(struct roam_sta *sta, int status)
+bool roam_policy_can_steer(const struct roam_sta *sta)
 {
-	if (!status) {
-		sta->steer_count = 0;
-		return;
-	}
+	if (sta->steer_count >= config.steer_retries)
+		return false;
 
-	sta->btm_rejected = true;
-	sta->kick_at = 0;
-
-	roam_log(ROAM_L_DEBUG, "roamd: %s rejected transition (code %d)", sta->mac, status);
+	return !sta->last_steer || roam_now - sta->last_steer >= STEER_RETRY_INTERVAL;
 }
 
 static bool sta_should_leave(struct roam_sta *sta, struct roam_bss *bss,
@@ -293,11 +287,6 @@ void roam_policy_run(struct roam_bss *bss)
 		if (sta->bss != bss)
 			continue;
 
-		if (sta->kick_at && roam_now >= sta->kick_at) {
-			roam_policy_kick(sta, bss);
-			continue;
-		}
-
 		lock = roam_device_lock(sta->addr);
 
 		if (lock == LOCK_NONE && (!config.band_steering || config.prefer == PREFER_NONE))
@@ -306,30 +295,15 @@ void roam_policy_run(struct roam_bss *bss)
 		if (roam_now - sta->connected_since < config.hold_time)
 			continue;
 
-		if (sta->last_steer && roam_now - sta->last_steer < config.hold_time)
-			continue;
-
 		if (sta->give_up_until) {
 			if (roam_now < sta->give_up_until)
 				continue;
 
 			sta->give_up_until = 0;
-			sta->btm_rejected = false;
-			sta->steer_count = 0;
-		} else if (sta->last_steer && roam_now - sta->last_steer > config.age_time) {
-			sta->btm_rejected = false;
-			sta->steer_count = 0;
 		}
 
-		if (sta->btm_rejected || sta->steer_count >= config.steer_retries) {
-			if (!sta->give_up_until) {
-				sta->give_up_until = roam_now + STEER_GIVE_UP;
-				roam_log(ROAM_L_INFO,
-					 "roamd: %s stays on %s GHz, leaving it alone",
-					 sta->mac, roam_band_name(bss->band));
-			}
+		if (!roam_policy_can_steer(sta))
 			continue;
-		}
 
 		if (lock == LOCK_NONE && !band_info_fresh(&sta->band[target->band], target->band))
 			policy_beacon_request(sta, bss, target);
@@ -343,11 +317,6 @@ void roam_policy_run(struct roam_bss *bss)
 			continue;
 		}
 
-		if (config.allow_kick) {
-			sta->kick_at = roam_now + config.kick_delay;
-			policy_btm(sta, bss, target, true);
-		} else {
-			policy_btm(sta, bss, target, false);
-		}
+		policy_btm(sta, bss, target);
 	}
 }

@@ -8,7 +8,7 @@
 		},
 		"write": {
 			"ubus": {
-				"roamd": [ "reload", "mesh_apply", "mesh_steer", "mesh_neighbors" ]
+				"roamd": [ "reload", "mesh_apply", "mesh_steer", "mesh_drop", "mesh_neighbors" ]
 			}
 		}
 	}

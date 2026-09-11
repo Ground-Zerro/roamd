@@ -266,27 +266,30 @@ feed_url() {
 
 pkg_get() {
 	if [ -f "$PKG_CERT" ]; then
-		curl -sL --max-time 20 --cacert "$PKG_CERT" "$1" -o "${2:--}"
+		curl -q -sL --max-time 20 --cacert "$PKG_CERT" "$1" -o "${2:--}"
 	else
-		curl -sL --max-time 20 "$1" -o "${2:--}"
+		curl -q -sL --max-time 20 "$1" -o "${2:--}"
 	fi
 }
 
 pkg_index_meta() {
-	local url index name="${3:-$PKG_MAIN}"
+	local url index meta name="${3:-$PKG_MAIN}"
 
-	url=$(feed_url "$1" "$2") || return 1
+	url=$(feed_url "$1" "$2") || return 2
 
 	index=$(pkg_get "$url/Packages")
-	[ -n "$index" ] || return 1
+	[ -n "$index" ] || return 2
 
-	printf '%s\n' "$index" | awk -v want="Package: $name" '
+	meta=$(printf '%s\n' "$index" | awk -v want="Package: $name" '
 		$0 == want { in_pkg = 1 }
 		/^$/ { in_pkg = 0 }
 		in_pkg && /^Version:/ { version = $2 }
 		in_pkg && /^Filename:/ { name = $2 }
 		in_pkg && /^SHA256sum:/ { sum = $2 }
-		END { if (name != "" && sum != "") print name, sum, version }'
+		END { if (name != "" && sum != "") print name, sum, version }')
+	[ -n "$meta" ] || return 1
+
+	echo "$meta"
 }
 
 pkg_version() {

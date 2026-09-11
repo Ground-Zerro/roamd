@@ -87,7 +87,6 @@ struct roam_config {
 	uint32_t check_time[BAND_MAX];
 	uint32_t poll_interval;
 	uint32_t deny_time;
-	uint32_t kick_delay;
 	uint32_t steer_retries;
 	uint32_t beacon_req_interval;
 	int log_level;
@@ -111,6 +110,7 @@ struct roam_bss {
 	enum roam_band band;
 	bool active;
 	bool subscribed;
+	bool mgmt_pending;
 	struct blob_attr *nr;
 
 	uint32_t pair_issues;
@@ -137,7 +137,6 @@ struct roam_sta {
 	uint64_t connected_since;
 	uint64_t last_steer;
 	uint64_t last_beacon_req;
-	uint64_t kick_at;
 
 	uint32_t steer_count;
 	uint32_t flap_count;
@@ -147,7 +146,6 @@ struct roam_sta {
 	uint8_t dialog_token;
 	bool btm;
 	bool rrm;
-	bool btm_rejected;
 };
 
 extern struct roam_config config;
@@ -194,7 +192,7 @@ void roam_sta_reset(struct roam_sta *sta);
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev);
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from);
 void roam_policy_run(struct roam_bss *bss);
-void roam_policy_btm_response(struct roam_sta *sta, int status);
+bool roam_policy_can_steer(const struct roam_sta *sta);
 
 void roam_ubus_object_init(void);
 

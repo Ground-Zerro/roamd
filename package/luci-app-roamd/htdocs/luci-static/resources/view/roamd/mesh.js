@@ -42,6 +42,7 @@ var callMeshClientUpdate = rpc.declare({
 var callMeshDiscover = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_discover',
+	params: [ 'rescan' ],
 	expect: { }
 });
 
@@ -95,8 +96,9 @@ var callMeshMemberUpdate = rpc.declare({
 var callMeshSettings = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
-	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'auto_update',
-		'auto_update_every', 'auto_update_unit', 'pkg_url', 'controller_name' ],
+	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'backhaul_delta',
+		'backhaul_min_signal', 'auto_update', 'auto_update_every', 'auto_update_unit', 'pkg_url',
+		'controller_name' ],
 	expect: { }
 });
 
@@ -235,6 +237,7 @@ var ACQUIRE_MSG = [
 	[ /^unknown OpenWrt version$/, function() { return _('unknown OpenWrt version'); } ],
 	[ /^no package for the OpenWrt version of the node$/, function() { return _('no package for the OpenWrt version of the node'); } ],
 	[ /^package installation failed on the node$/, function() { return _('the package could not be installed on the node'); } ],
+	[ /^curl cannot be installed — no control channel to the node$/, function() { return _('curl could not be installed: without it the controller has no access to the package repository and no control channel to the node'); } ],
 	[ /^package source is not trusted: .*$/, function() { return _('the package source is not trusted: the repository must be https and its certificate must be in /etc/roamd/pkg.crt'); } ],
 	[ /^installing roamd and interface for (.+)$/, function(m) { return _('packages for OpenWrt %s').format(m[1]); } ],
 	[ /^repository unreachable, installed from the controller cache$/, function() { return _('repository unreachable, installed from the cache'); } ],
@@ -304,14 +307,13 @@ function discoverDialog() {
 		])
 	]);
 
-	var tick = function() {
-		callMeshDiscover().then(function(res) {
+	var tick = function(rescan) {
+		callMeshDiscover(rescan).then(function(res) {
 			res = res || {};
 			var list = res.candidates || [];
 
-			if (res.scanning && !list.length) {
-				dom.content(body, E('p', { 'class': 'spinning' }, _('Scanning the local network…')));
-				window.setTimeout(tick, 3000);
+			if (res.scanning) {
+				window.setTimeout(function() { tick(false); }, 3000);
 				return;
 			}
 
@@ -321,16 +323,19 @@ function discoverDialog() {
 			}
 
 			dom.content(body, list.map(renderCandidate));
-			if (res.scanning)
-				window.setTimeout(tick, 3000);
 		});
 	};
 
-	tick();
+	tick(true);
 }
 
+var PKG_STATE_TEXT = {
+	missing: _('OpenWrt %s (%s) is not supported: the repository has no roamd package for this version and architecture'),
+	unreachable: _('Could not check for the roamd package for OpenWrt %s (%s): the package repository is unreachable. Check the internet access of the controller and search again')
+};
+
 function renderCandidate(c) {
-	var ready = c.pkg_ready !== false;
+	var ready = c.pkg === 'ready';
 	var lines = [
 		E('strong', {}, c.name || c.addr),
 		E('br'),
@@ -339,8 +344,7 @@ function renderCandidate(c) {
 
 	if (!ready)
 		lines.push(E('div', { 'style': 'color:#c33' }, E('small', {},
-			_('no roamd package for OpenWrt %s (%s) — build it and put it in the repository')
-				.format(c.os || '?', c.arch || '?'))));
+			PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?'))));
 
 	var action = E('button', {
 		'class': 'btn cbi-button cbi-button-action',
@@ -536,19 +540,15 @@ function renderNodes(state) {
 		])
 	]);
 	var rows = [ controllerRow(state) ].concat(members.map(function(m) {
-		var ver = m.os_version || '-';
 		var srcHint = { repository: _('package taken from the repository'),
 				cache: _('repository was unreachable, package taken from the controller cache') };
+		var ver = versionCell(m.os_version, m.pkg_version, [
+			m.pkg_source === 'cache' ? ' ⚠' : '',
+			m.update_available ? E('span', { 'style': 'color:#c60', 'title': _('update available') }, ' ⬆') : ''
+		]);
 
-		if (m.pkg_version)
-			ver = '%s / roamd %s'.format(ver, m.pkg_version);
-
-		if (m.pkg_source && srcHint[m.pkg_source])
-			ver = E('span', { 'title': srcHint[m.pkg_source] },
-				[ ver, m.pkg_source === 'cache' ? ' ⚠' : '' ]);
-
-		if (m.update_available)
-			ver = E('span', {}, [ ver, ' ', E('span', { 'style': 'color:#c60', 'title': _('update available') }, '⬆') ]);
+		if (srcHint[m.pkg_source])
+			ver.setAttribute('title', srcHint[m.pkg_source]);
 
 		var actions = E('div', {}, [
 			state.auto_update ? '' : E('button', {
@@ -580,6 +580,15 @@ function renderNodes(state) {
 	return E('div', {}, [ deps, running, intro, E('div', {}, addButton), E('br'), table ]);
 }
 
+function versionCell(os, pkg, marks) {
+	var lines = [ os ? 'OpenWrt %s'.format(os) : '-' ];
+
+	if (pkg)
+		lines.push(E('br'), 'roamd %s'.format(pkg));
+
+	return E('div', { 'style': 'white-space:nowrap' }, lines.concat(marks || []));
+}
+
 function controllerRow(state) {
 	var self = state.self || {};
 	var name = state.controller_name || self.hostname || _('This device');
@@ -590,10 +599,7 @@ function controllerRow(state) {
 		]),
 		E('div', {}, E('small', { 'style': 'color:#888' }, _('controller')))
 	]);
-	var ver = self.os_version || '-';
-
-	if (self.pkg_version)
-		ver = '%s / roamd %s'.format(ver, self.pkg_version);
+	var ver = versionCell(self.os_version, self.pkg_version);
 
 	var check = state.auto_update ? '' : E('button', {
 		'class': 'btn cbi-button',
@@ -740,13 +746,13 @@ function renameMember(id, current) {
 function refreshNodes() {
 	return callMeshStatus().then(function(fresh) {
 		var pane = document.getElementById('mesh-nodes-pane');
-		var last = document.getElementById('mesh-last-check');
+
+		fresh = fresh || {};
 
 		if (pane)
-			dom.content(pane, renderNodes(fresh || {}));
+			dom.content(pane, renderNodes(fresh));
 
-		if (last)
-			dom.content(last, lastCheckText(fresh || {}));
+		settingsSync(fresh);
 	});
 }
 
@@ -1380,17 +1386,26 @@ function lastCheckText(state) {
 	return result ? '%s — %s'.format(when, result) : when;
 }
 
+var BACKHAUL_FIELDS = [ 'backhaul_ssid', 'backhaul_key' ];
+var settingsSync;
+
 function renderSettings(state) {
 	var form = {
 		backhaul_enabled: !!state.backhaul_enabled,
 		backhaul_ssid: state.backhaul_ssid || '',
 		backhaul_key: state.backhaul_key || '',
 		wifi_shutdown: !!state.wifi_shutdown,
+		backhaul_delta: state.backhaul_delta,
+		backhaul_min_signal: state.backhaul_min_signal,
 		auto_update: !!state.auto_update,
 		auto_update_every: state.auto_update_every || 1,
 		auto_update_unit: state.auto_update_unit || 'day',
 		pkg_url: state.pkg_url === state.pkg_url_default ? '' : (state.pkg_url || '')
 	};
+	var inputs = {};
+	var synced = {};
+
+	BACKHAUL_FIELDS.forEach(function(key) { synced[key] = form[key]; });
 
 	function toggle(key, label, desc, onchange) {
 		var input = E('input', {
@@ -1418,6 +1433,8 @@ function renderSettings(state) {
 			'change': function(ev) { form[key] = ev.target.value; }
 		});
 
+		inputs[key] = input;
+
 		if (secret) {
 			var reveal = E('input', {
 				'type': 'checkbox',
@@ -1441,11 +1458,25 @@ function renderSettings(state) {
 		]);
 	}
 
+	function number(key, label, desc, min, max) {
+		return E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, label),
+			E('div', { 'class': 'cbi-value-field' }, [
+				E('input', {
+					'type': 'number', 'class': 'cbi-input-text', 'style': 'width:6em',
+					'min': min, 'max': max, 'value': form[key], 'disabled': readOnly || null,
+					'change': function(ev) { form[key] = ev.target.value; }
+				}),
+				E('div', { 'class': 'cbi-value-description' }, desc)
+			])
+		]);
+	}
+
 	var status = E('span', { 'style': 'margin-left:1em' }, '');
 
-	function backhaulBands(aps) {
-		var ssid = state.backhaul_ssid || '';
-		var bands = (aps || []).filter(function(ap) { return ap.ssid === ssid; })
+	function backhaulBands(s) {
+		var ssid = s.backhaul_ssid || '';
+		var bands = (s.self_aps || []).filter(function(ap) { return ap.ssid === ssid; })
 			.map(function(ap) { return '%s %s'.format(ap.band, _('GHz')); });
 
 		return bands.length ? bands.join(', ') : _('not broadcasting');
@@ -1503,9 +1534,10 @@ function renderSettings(state) {
 		])
 	]);
 
+	var lastField = E('div', { 'class': 'cbi-value-field' }, lastCheckText(state));
 	var lastRow = E('div', { 'class': 'cbi-value' }, [
 		E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Last check')),
-		E('div', { 'class': 'cbi-value-field', 'id': 'mesh-last-check' }, lastCheckText(state))
+		lastField
 	]);
 
 	function autoRows() {
@@ -1524,13 +1556,30 @@ function renderSettings(state) {
 				form.backhaul_enabled ? '1' : '0',
 				form.backhaul_ssid, form.backhaul_key,
 				form.wifi_shutdown ? '1' : '0',
+				String(form.backhaul_delta), String(form.backhaul_min_signal),
 				form.auto_update ? '1' : '0',
 				String(form.auto_update_every), form.auto_update_unit,
 				form.pkg_url
-			).then(function() { status.textContent = _('Saved.'); },
-			       function() { status.textContent = _('Save failed.'); });
+			).then(function() {
+				BACKHAUL_FIELDS.forEach(function(key) { synced[key] = form[key]; });
+				status.textContent = _('Saved.');
+			}, function() { status.textContent = _('Save failed.'); });
 		}
 	}, _('Save'));
+
+	var bandsField = E('div', { 'class': 'cbi-value-field' }, backhaulBands(state));
+
+	settingsSync = function(fresh) {
+		dom.content(bandsField, backhaulBands(fresh));
+		dom.content(lastField, lastCheckText(fresh));
+
+		BACKHAUL_FIELDS.forEach(function(key) {
+			if (inputs[key].value !== synced[key])
+				return;
+
+			inputs[key].value = form[key] = synced[key] = fresh[key] || '';
+		});
+	};
 
 	autoRows();
 
@@ -1540,8 +1589,12 @@ function renderSettings(state) {
 		toggle('backhaul_enabled', _('Wireless backhaul')),
 		E('div', { 'class': 'cbi-value' }, [
 			E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Broadcast on bands')),
-			E('div', { 'class': 'cbi-value-field' }, backhaulBands(state.self_aps))
+			bandsField
 		]),
+		number('backhaul_delta', _('5 GHz advantage for the node link'),
+			_('dB. A node bringing up its wireless link picks 5 GHz if its signal is weaker than 2.4 GHz by no more than this value.'), 0, 40),
+		number('backhaul_min_signal', _('Minimum 5 GHz signal for the node link'),
+			_('dBm. A weaker 5 GHz signal is not used for the node link while 2.4 GHz is available.'), -95, -40),
 		text('backhaul_ssid', _('Backhaul network name')),
 		text('backhaul_key', _('Backhaul key'), null, true),
 

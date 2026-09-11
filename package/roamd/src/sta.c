@@ -141,8 +141,6 @@ void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int sign
 		sta->connected_since = roam_now;
 		sta->steer_count = 0;
 		sta->beacon_req_silent = 0;
-		sta->btm_rejected = false;
-		sta->kick_at = 0;
 	}
 
 	sta_band_seen(sta, bss->band, signal);
@@ -152,7 +150,6 @@ void roam_sta_reset(struct roam_sta *sta)
 {
 	sta->bss = NULL;
 	sta->connected_since = 0;
-	sta->kick_at = 0;
 }
 
 void roam_sta_disconnected(struct roam_sta *sta)

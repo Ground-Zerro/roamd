@@ -32,7 +32,6 @@ struct mesh_member {
 	char mac[MESH_MAC_MAX];
 	char addr[MESH_ADDR_MAX];
 	bool managed;
-	uint32_t log_seq;
 };
 
 extern struct list_head mesh_members;
@@ -54,7 +53,14 @@ struct mesh_event {
 	uint8_t from_band;
 	uint8_t to_band;
 	uint8_t type;
+	char origin[MESH_ID_MAX];
+	uint32_t origin_seq;
 };
+
+#define MESH_REPORT_EVENTS	100
+
+#define MESH_BH_DELTA_DEFAULT		20
+#define MESH_BH_MIN_SIGNAL_DEFAULT	-78
 
 struct mesh_config {
 	bool enabled;
@@ -66,6 +72,8 @@ struct mesh_config {
 	char backhaul_bssids[128];
 	char ft_key[33];
 	bool wifi_shutdown;
+	int backhaul_delta;
+	int backhaul_min_signal;
 	bool auto_update;
 	uint32_t auto_update_every;
 	char auto_update_unit[MESH_WORD_MAX];
@@ -99,6 +107,7 @@ struct mesh_assoc {
 	uint32_t rate;
 	uint32_t width;
 	uint32_t nss;
+	uint32_t connected;
 	uint64_t rx_bytes;
 	uint64_t tx_bytes;
 	char std[8];
@@ -159,7 +168,7 @@ bool mesh_client_set(const char *mac, const char *band, const char *alias, const
 void mesh_neighbors_set(struct blob_attr *arr);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
 
-void mesh_ctrl_discover(struct blob_buf *b);
+void mesh_ctrl_discover(bool rescan, struct blob_buf *b);
 void mesh_ctrl_acquire(const char *addr, struct blob_buf *b);
 void mesh_ctrl_acquire_blob(struct blob_buf *b);
 bool mesh_ctrl_acquire_mac(uint8_t *out);
@@ -199,6 +208,7 @@ void mesh_node_report(struct blob_buf *b);
 void mesh_self_info(struct blob_buf *b);
 void mesh_node_diag(struct blob_buf *b);
 bool mesh_node_steer(const char *macstr, struct blob_attr *neighbors);
+bool mesh_node_drop(const char *macstr);
 void mesh_node_touch(void);
 uint32_t mesh_node_contact_age(void);
 void mesh_node_watch_start(void);
@@ -208,9 +218,8 @@ void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band,
 		    enum mesh_event_type type);
 void mesh_log_push(const struct mesh_event *ev);
 void mesh_log_dump(struct blob_buf *b, unsigned int limit);
-void mesh_log_merge(const char *node, const char *mac, uint32_t ts,
-		    const char *from_band, const char *to_band, const char *type);
-void mesh_log_ingest(const char *node, struct blob_attr *events);
+void mesh_log_ingest(const char *id, const char *node, struct blob_attr *events);
+void mesh_log_forget(const char *id);
 void mesh_log_load(void);
 void mesh_log_flush(void);
 const char *mesh_event_type_name(enum mesh_event_type t);

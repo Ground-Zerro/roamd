@@ -159,7 +159,7 @@ function renderClients() {
 			lockLabel(client.band_lock),
 			client.btm ? _('yes') : _('no'),
 			client.rrm ? _('yes') : _('no'),
-			client.btm_rejected ? _('rejected') : String(client.steer_count || 0)
+			String(client.steer_count || 0)
 		]);
 	});
 
@@ -520,6 +520,11 @@ var StatusTab = form.DummyValue.extend({
 	remove: function () {}
 });
 
+function toggleActions(ev) {
+	document.querySelector('#view > .cbi-page-actions').style.display =
+		ev.detail.tab === 'status' ? 'none' : '';
+}
+
 return view.extend({
 	load: function () {
 		return Promise.all([
@@ -646,22 +651,16 @@ return view.extend({
 		o.default = '1';
 
 		o = sub.option(form.Flag, 'allow_kick', _('Force disconnect'),
-			_('Disconnect clients that ignore the roaming request. For devices without 802.11v support this is the only way to move them: until it is enabled, such a client stays on a dying link until it decides to leave on its own, which can take minutes. Some clients reconnect to the same band.'));
+			_('Disconnect clients without 802.11v support when they have to be moved: they cannot be asked to roam, and until this is enabled such a client stays on a dying link until it decides to leave on its own, which can take minutes. Some clients reconnect to the same band.'));
 		o.default = '0';
 
-		o = sub.option(form.Value, 'kick_delay', _('Delay before disconnect'),
-			_('Milliseconds between the roaming request and the forced disconnect.'));
-		o.datatype = 'uinteger';
-		o.default = '5000';
-		o.depends('allow_kick', '1');
-
 		o = sub.option(form.Value, 'hold_time', _('Hold time'),
-			_('Milliseconds to wait before steering the same client again.'));
+			_('Milliseconds after connecting before the client may be steered.'));
 		o.datatype = 'uinteger';
 		o.default = '30000';
 
 		o = sub.option(form.Value, 'steer_retries', _('Steering attempts'),
-			_('Give up after this many unsuccessful attempts.'));
+			_('Roaming requests per connection, 5 seconds apart. A client that stays after the last one is left alone until it reconnects.'));
 		o.datatype = 'range(1,10)';
 		o.default = '3';
 
@@ -709,7 +708,10 @@ return view.extend({
 		};
 
 		if (!common.isNode(meshState))
-			return m.render();
+			return m.render().then(function (node) {
+				node.addEventListener('cbi-tab-active', toggleActions, true);
+				return node;
+			});
 
 		this.handleSaveApply = null;
 		this.handleReset = null;

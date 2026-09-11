@@ -59,7 +59,6 @@ static const struct opt_desc opts[] = {
 	OPT("check_time_high", OPT_U32, check_time[BAND_HIGH]),
 	OPT("poll_interval", OPT_U32, poll_interval),
 	OPT("deny_time", OPT_U32, deny_time),
-	OPT("kick_delay", OPT_U32, kick_delay),
 	OPT("steer_retries", OPT_U32, steer_retries),
 	OPT("beacon_req_interval", OPT_U32, beacon_req_interval),
 	OPT("log_level", OPT_INT, log_level)
@@ -94,7 +93,6 @@ static void roam_config_init(void)
 	config.check_time[BAND_HIGH] = 4000;
 	config.poll_interval = 2000;
 	config.deny_time = 15000;
-	config.kick_delay = 5000;
 	config.steer_retries = 3;
 	config.beacon_req_interval = 20000;
 	config.log_level = ROAM_L_INFO;

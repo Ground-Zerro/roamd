@@ -67,6 +67,8 @@ mac=$(echo "$mac" | tr -d '\r\n ')
 branch="${version%.*}"
 [ -n "$branch" ] || fail compat "unknown OpenWrt version"
 
+ensure_curl || fail install "curl cannot be installed — no control channel to the node"
+
 report install progress "installing roamd and interface for $branch"
 install_roamd_pkg "$ADDR" "$branch" force
 case $? in
@@ -296,8 +298,6 @@ if [ -n "$pubkey" ]; then
 		report enroll progress "service key was not installed, password login left enabled on the node"
 	fi
 fi
-
-ensure_curl || fail install "curl cannot be installed — no control channel to the node"
 
 register_member "$member_id" "$mac" "$ADDR" "${hostname:-OpenWrt}"
 ubus -t 3 call roamd reload >/dev/null 2>&1

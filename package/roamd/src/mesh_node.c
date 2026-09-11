@@ -15,6 +15,7 @@
 #define MESH_WATCH_INTERVAL	10000
 #define MESH_BH_STA		"mesh_bh_sta"
 #define MESH_BH_BAND_TIMEOUT	45000
+#define MESH_DROP_REASON	4
 #define MESH_DUMBAP		"/usr/libexec/roamd/mesh-dumbap.sh"
 
 static struct uloop_timeout watch_timer;
@@ -185,9 +186,19 @@ static bool bh_sta_apply(int band, bool enabled)
 	return true;
 }
 
+static const char *bh_signal_text(int signal, char *buf, size_t len)
+{
+	if (signal == ROAMD_NO_SIGNAL)
+		return "not found";
+
+	snprintf(buf, len, "%d dBm", signal);
+
+	return buf;
+}
+
 static int bh_best_band(void)
 {
-	char cmd[768], out[32];
+	char cmd[768], out[32], t24[16], t5[16];
 	int s24 = ROAMD_NO_SIGNAL, s5 = ROAMD_NO_SIGNAL;
 
 	if (!mesh.backhaul_bssids[0])
@@ -206,14 +217,16 @@ static int bh_best_band(void)
 		 "END { printf \"%%d %%d\", h2 ? b2 : 0, h5 ? b5 : 0 }'",
 		 mesh.backhaul_bssids);
 
-	if (!cmd_line(cmd, out, sizeof(out)))
+	if (!cmd_line(cmd, out, sizeof(out)) || sscanf(out, "%d %d", &s24, &s5) != 2) {
+		roam_log(ROAM_L_INFO, "mesh: backhaul scan gave no result");
 		return -1;
+	}
 
-	if (sscanf(out, "%d %d", &s24, &s5) != 2)
-		return -1;
+	roam_log(ROAM_L_INFO, "mesh: backhaul scan: 2.4 GHz %s, 5 GHz %s",
+		 bh_signal_text(s24, t24, sizeof(t24)), bh_signal_text(s5, t5, sizeof(t5)));
 
 	if (s5 != ROAMD_NO_SIGNAL && (s24 == ROAMD_NO_SIGNAL ||
-				      s5 >= s24 - config.cross_band_delta))
+	    (s5 >= mesh.backhaul_min_signal && s5 >= s24 - mesh.backhaul_delta)))
 		return 1;
 
 	return s24 != ROAMD_NO_SIGNAL ? 0 : -1;
@@ -1028,7 +1041,7 @@ bool mesh_node_steer(const char *macstr, struct blob_attr *neighbors)
 		return false;
 
 	sta = roam_sta_get(ea->ether_addr_octet, false);
-	if (!sta || !sta->bss)
+	if (!sta || !sta->bss || !roam_policy_can_steer(sta))
 		return false;
 
 	if (!sta->btm) {
@@ -1043,7 +1056,7 @@ bool mesh_node_steer(const char *macstr, struct blob_attr *neighbors)
 
 	blob_buf_init(&sb, 0);
 	blobmsg_add_string(&sb, "addr", sta->mac);
-	blobmsg_add_u8(&sb, "disassociation_imminent", config.allow_kick);
+	blobmsg_add_u8(&sb, "disassociation_imminent", 0);
 	blobmsg_add_u32(&sb, "disassociation_timer", 0);
 	blobmsg_add_u32(&sb, "reassoc_delay", 0);
 	blobmsg_add_u32(&sb, "mbo_reason", 5);
@@ -1066,6 +1079,35 @@ bool mesh_node_steer(const char *macstr, struct blob_attr *neighbors)
 
 	sta->last_steer = roam_now;
 	sta->steer_count++;
+
+	roam_log(ROAM_L_INFO, "mesh: asking %s to move to another node (attempt %u of %u)",
+		 sta->mac, sta->steer_count, config.steer_retries);
+
+	return true;
+}
+
+bool mesh_node_drop(const char *macstr)
+{
+	static struct blob_buf db;
+	struct ether_addr *ea = ether_aton(macstr);
+	struct roam_sta *sta;
+
+	if (!ea)
+		return false;
+
+	sta = roam_sta_get(ea->ether_addr_octet, false);
+	if (!sta || !sta->bss)
+		return false;
+
+	blob_buf_init(&db, 0);
+	blobmsg_add_string(&db, "addr", sta->mac);
+	blobmsg_add_u32(&db, "reason", MESH_DROP_REASON);
+	blobmsg_add_u8(&db, "deauth", 1);
+	roam_bss_invoke(sta->bss, "del_client", &db);
+
+	roam_log(ROAM_L_INFO, "mesh: %s is associated elsewhere, removed from %s",
+		 sta->mac, sta->bss->ifname);
+	roam_sta_disconnected(sta);
 
 	return true;
 }
@@ -1173,5 +1215,5 @@ void mesh_node_report(struct blob_buf *b)
 
 	node_profile(b);
 	mesh_aps_dump(b, "aps");
-	mesh_log_dump(b, 100);
+	mesh_log_dump(b, MESH_REPORT_EVENTS);
 }

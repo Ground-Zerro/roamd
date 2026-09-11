@@ -305,11 +305,19 @@ void roam_neighbors_resync(void)
 			neighbor_sync(bss);
 }
 
+static void bss_enable_management(struct roam_bss *bss);
+
 static void bss_poll(struct uloop_timeout *t)
 {
 	struct roam_bss *bss = container_of(t, struct roam_bss, poll);
 
 	roam_time_update();
+
+	if (bss->mgmt_pending) {
+		bss_enable_management(bss);
+		if (!bss->mgmt_pending)
+			roam_log(ROAM_L_INFO, "roamd: management enabled on %s after retry", bss->ifname);
+	}
 
 	ubus_invoke(ubus_ctx, bss->obj_id, "get_status", NULL, status_cb, bss, UBUS_TIMEOUT);
 
@@ -376,38 +384,6 @@ static int handle_sta_event(struct roam_bss *bss, const char *method, struct blo
 		 method, sta->mac, roam_band_name(bss->band), bss->ifname);
 
 	return 17;
-}
-
-static int handle_btm_response(struct roam_bss *bss, struct blob_attr *msg)
-{
-	enum {
-		BR_ADDR,
-		BR_STATUS,
-		__BR_MAX
-	};
-	static const struct blobmsg_policy policy[__BR_MAX] = {
-		[BR_ADDR] = { "address", BLOBMSG_TYPE_STRING },
-		[BR_STATUS] = { "status-code", BLOBMSG_TYPE_INT8 },
-	};
-	struct blob_attr *tb[__BR_MAX];
-	struct ether_addr *ea;
-	struct roam_sta *sta;
-
-	blobmsg_parse(policy, __BR_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[BR_ADDR] || !tb[BR_STATUS])
-		return 0;
-
-	ea = ether_aton(blobmsg_get_string(tb[BR_ADDR]));
-	if (!ea)
-		return 0;
-
-	sta = roam_sta_get((uint8_t *)ea->ether_addr_octet, false);
-	if (!sta)
-		return 0;
-
-	roam_policy_btm_response(sta, blobmsg_get_u8(tb[BR_STATUS]));
-
-	return 0;
 }
 
 static int handle_beacon_report(struct blob_attr *msg)
@@ -501,9 +477,6 @@ static int bss_notify_cb(struct ubus_context *ctx, struct ubus_object *obj,
 	if (!config.enabled)
 		return 0;
 
-	if (!strcmp(method, "bss-transition-response"))
-		return handle_btm_response(bss, msg);
-
 	if (!strcmp(method, "beacon-report"))
 		return handle_beacon_report(msg);
 
@@ -540,15 +513,19 @@ static void bss_remove_cb(struct ubus_context *ctx, struct ubus_subscriber *sub,
 
 static void bss_enable_management(struct roam_bss *bss)
 {
+	int notify, mgmt;
+
 	blob_buf_init(&b, 0);
 	blobmsg_add_u32(&b, "notify_response", 1);
-	roam_bss_invoke(bss, "notify_response", &b);
+	notify = roam_bss_invoke(bss, "notify_response", &b);
 
 	blob_buf_init(&b, 0);
 	blobmsg_add_u8(&b, "neighbor_report", config.neighbor_reports);
 	blobmsg_add_u8(&b, "beacon_report", config.neighbor_reports);
 	blobmsg_add_u8(&b, "bss_transition", config.bss_transition);
-	roam_bss_invoke(bss, "bss_mgmt_enable", &b);
+	mgmt = roam_bss_invoke(bss, "bss_mgmt_enable", &b);
+
+	bss->mgmt_pending = notify == UBUS_STATUS_TIMEOUT || mgmt == UBUS_STATUS_TIMEOUT;
 }
 
 static void bss_register(const char *path, uint32_t id)

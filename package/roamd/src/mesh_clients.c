@@ -22,6 +22,7 @@ struct client_rec {
 	uint32_t rate;
 	uint32_t width;
 	uint32_t nss;
+	uint32_t connected;
 	uint64_t rx_bytes;
 	uint64_t tx_bytes;
 	uint32_t last_seen;
@@ -107,6 +108,7 @@ static void client_touch(struct client_rec *c, const char *node, const char *ban
 	if (std)
 		strncpy(c->std, std, sizeof(c->std) - 1);
 	c->wired = false;
+	c->connected = 0;
 	c->rate = rate;
 	c->width = width;
 	c->nss = nss;
@@ -114,6 +116,11 @@ static void client_touch(struct client_rec *c, const char *node, const char *ban
 	c->tx_bytes = tx;
 	c->last_seen = now;
 	c->online = true;
+}
+
+static bool client_claimable(const struct client_rec *c, uint32_t connected)
+{
+	return !c->online || (connected && (!c->connected || connected < c->connected));
 }
 
 static void refresh_local(uint32_t now)
@@ -138,11 +145,12 @@ static void refresh_local(uint32_t now)
 			 a->addr[3], a->addr[4], a->addr[5]);
 
 		c = client_upsert(a->addr, mac);
-		if (!c)
+		if (!c || !client_claimable(c, a->connected))
 			continue;
 
 		client_touch(c, "controller", a->wired ? NULL : roam_band_name(a->band),
 			     a->rate, a->std, a->width, a->nss, a->rx_bytes, a->tx_bytes, now);
+		c->connected = a->connected;
 		c->wired = a->wired;
 		strncpy(c->enc, a->enc, sizeof(c->enc) - 1);
 	}
@@ -189,6 +197,7 @@ static void refresh_member(const char *id, uint32_t now)
 		struct blob_attr *c[__CL_MAX];
 		struct ether_addr *ea;
 		struct client_rec *rec;
+		uint32_t connected;
 
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE)
 			continue;
@@ -201,8 +210,10 @@ static void refresh_member(const char *id, uint32_t now)
 		if (!ea)
 			continue;
 
+		connected = num_field(cur, "connected");
+
 		rec = client_upsert(ea->ether_addr_octet, blobmsg_get_string(c[CL_MAC]));
-		if (!rec)
+		if (!rec || !client_claimable(rec, connected))
 			continue;
 
 		client_touch(rec, id,
@@ -211,6 +222,7 @@ static void refresh_member(const char *id, uint32_t now)
 			     c[CL_STD] ? blobmsg_get_string(c[CL_STD]) : NULL,
 			     num_field(cur, "width"), num_field(cur, "nss"),
 			     num_field(cur, "rx_bytes"), num_field(cur, "tx_bytes"), now);
+		rec->connected = connected;
 		rec->wired = c[CL_WIRED] && blobmsg_get_u8(c[CL_WIRED]);
 		rec->enc[0] = '\0';
 		if (c[CL_ENC])

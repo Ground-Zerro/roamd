@@ -147,6 +147,7 @@ enum mesh_field_type {
 	MESH_BOOL,
 	MESH_ROLE,
 	MESH_U32,
+	MESH_INT,
 	MESH_STR
 };
 
@@ -168,6 +169,8 @@ static const struct mesh_field fields[] = {
 	MFIELD("backhaul_bssids", MESH_STR, backhaul_bssids),
 	MFIELD("ft_key", MESH_STR, ft_key),
 	MFIELD("wifi_shutdown", MESH_BOOL, wifi_shutdown),
+	MFIELD("backhaul_delta", MESH_INT, backhaul_delta),
+	MFIELD("backhaul_min_signal", MESH_INT, backhaul_min_signal),
 	MFIELD("auto_update", MESH_BOOL, auto_update),
 	MFIELD("auto_update_every", MESH_U32, auto_update_every),
 	MFIELD("auto_update_unit", MESH_STR, auto_update_unit),
@@ -388,11 +391,12 @@ static void assoc_phy(struct blob_attr *rate, struct mesh_assoc *a)
 static void assoc_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 {
 	static const struct blobmsg_policy lp = { "results", BLOBMSG_TYPE_ARRAY };
-	enum { A_MAC, A_RX, A_TX, __A_MAX };
+	enum { A_MAC, A_RX, A_TX, A_CONNECTED, __A_MAX };
 	static const struct blobmsg_policy ap[__A_MAX] = {
 		[A_MAC] = { "mac", BLOBMSG_TYPE_STRING },
 		[A_RX] = { "rx", BLOBMSG_TYPE_TABLE },
 		[A_TX] = { "tx", BLOBMSG_TYPE_TABLE },
+		[A_CONNECTED] = { "connected_time", BLOBMSG_TYPE_INT32 },
 	};
 	struct assoc_ctx *ctx = req->priv;
 	struct blob_attr *results = NULL, *cur;
@@ -422,6 +426,8 @@ static void assoc_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 		memset(a, 0, sizeof(*a));
 		memcpy(a->addr, ea->ether_addr_octet, 6);
 		a->band = ctx->band;
+		if (tb[A_CONNECTED])
+			a->connected = blobmsg_get_u32(tb[A_CONNECTED]);
 		if (ctx->enc)
 			strncpy(a->enc, ctx->enc, sizeof(a->enc) - 1);
 		if (tb[A_TX])
@@ -546,6 +552,8 @@ void mesh_assoc_blob(struct blob_buf *b, const struct mesh_assoc *a)
 		blobmsg_add_u32(b, "width", a->width);
 	if (a->nss)
 		blobmsg_add_u32(b, "nss", a->nss);
+	if (a->connected)
+		blobmsg_add_u32(b, "connected", a->connected);
 	if (a->enc[0])
 		blobmsg_add_string(b, "encryption", a->enc);
 	if (a->rx_bytes)
@@ -582,6 +590,8 @@ void mesh_config_init(void)
 	mesh.enabled = true;
 	mesh.role = MESH_CONTROLLER;
 	mesh.backhaul_enabled = true;
+	mesh.backhaul_delta = MESH_BH_DELTA_DEFAULT;
+	mesh.backhaul_min_signal = MESH_BH_MIN_SIGNAL_DEFAULT;
 	mesh.auto_update_every = 1;
 	strcpy(mesh.auto_update_unit, "day");
 	strcpy(mesh.pkg_url, MESH_PKG_URL_DEFAULT);
@@ -631,6 +641,9 @@ static void field_apply(const struct mesh_field *f, const char *value)
 		break;
 	case MESH_U32:
 		*(uint32_t *)p = strtoul(value, NULL, 10);
+		break;
+	case MESH_INT:
+		*(int *)p = strtol(value, NULL, 10);
 		break;
 	case MESH_STR:
 		strncpy(p, value, f->size - 1);
@@ -699,6 +712,12 @@ struct uci_section *uci_session_find(struct uci_session *s, const char *type,
 void uci_session_set(struct uci_session *s, const char *section,
 		     const char *option, const char *value)
 {
+	struct uci_ptr ptr = { .package = s->name, .section = section, .option = option };
+
+	if (uci_lookup_ptr(s->ctx, &ptr, NULL, false) == UCI_OK && ptr.o &&
+	    ptr.o->type == UCI_TYPE_STRING && !strcmp(ptr.o->v.string, value))
+		return;
+
 	mesh_uci_set(s->ctx, s->name, section, option, value);
 	s->dirty = true;
 }

@@ -5,9 +5,26 @@
 OUT="/var/run/roamd/candidates.json"
 mkdir -p /var/run/roamd
 
+pkg_state() {
+	local branch="$1" arch="$2" rc
+
+	[ -n "$branch" ] && [ -n "$arch" ] || { echo missing; return; }
+
+	ensure_curl
+	pkg_index_meta "$branch" "$arch" >/dev/null
+	rc=$?
+	[ "$rc" = 0 ] || [ -z "$(pkg_local "$branch" "$arch")" ] || rc=0
+
+	case $rc in
+		0) echo ready ;;
+		1) echo missing ;;
+		*) echo unreachable ;;
+	esac
+}
+
 probe() {
 	local addr="$1" mac="$2"
-	local board hostname model board_name version role ctrl arch branch pkg
+	local board hostname model board_name version role ctrl arch branch
 
 	board=$(node_ssh "$addr" 'ubus call system board' 2>/dev/null)
 	[ -n "$board" ] || return 1
@@ -33,13 +50,7 @@ probe() {
 	branch="${version%.*}"
 	arch=$(node_arch "$addr")
 	json_add_string arch "${arch:-}"
-
-	pkg=""
-	if [ -n "$branch" ] && [ -n "$arch" ]; then
-		pkg=$(pkg_version "$branch" "$arch" 2>/dev/null)
-	fi
-	json_add_boolean pkg_ready "$([ -n "$pkg" ] && echo 1 || echo 0)"
-	json_add_boolean eligible 1
+	json_add_string pkg "$(pkg_state "$branch" "$arch")"
 	json_dump | tr -d '\n\t'
 }
 
@@ -74,5 +85,6 @@ rm -f /var/run/roamd/cand-macs.txt
 
 items=$(tr '\n' ',' < /var/run/roamd/cand-items.txt | sed 's/,*$//')
 rm -f /var/run/roamd/cand-items.txt
-printf '{"candidates":[%s]}' "$items" > "$OUT"
+printf '{"candidates":[%s]}' "$items" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
 cat "$OUT"

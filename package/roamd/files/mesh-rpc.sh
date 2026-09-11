@@ -19,7 +19,7 @@ rpc_login() {
 
 	cacert=$(rpc_cacert "$id") || return 1
 
-	curl -s --max-time 8 $cacert "https://${addr}/ubus" \
+	curl -q -s --max-time 8 $cacert "https://${addr}/ubus" \
 		-d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"call\",\"params\":[\"$RPC_NULL\",\"session\",\"login\",{\"username\":\"$user\",\"password\":\"$pass\"}]}" \
 		2>/dev/null | jsonfilter -e '@.result[1].ubus_rpc_session' 2>/dev/null
 }
@@ -29,7 +29,7 @@ rpc_call() {
 	local cacert
 	[ -n "$args" ] || args='{}'
 	cacert=$(rpc_cacert "$id") || return 1
-	curl -s --max-time 12 $cacert "https://${addr}/ubus" \
+	curl -q -s --max-time 12 $cacert "https://${addr}/ubus" \
 		-d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"call\",\"params\":[\"$session\",\"$object\",\"$method\",$args]}" \
 		2>/dev/null
 }

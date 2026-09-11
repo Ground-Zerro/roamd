@@ -78,7 +78,7 @@ for sect in $members; do
 		name=$(uci -q get "roamd.$sect.name")
 		events=$(echo "$report" | jsonfilter -e '@.events' 2>/dev/null)
 		if [ -n "$name" ] && [ -n "$events" ] && [ "$events" != "[ ]" ]; then
-			ubus -t 3 call roamd mesh_log_ingest "{\"node\":\"$name\",\"events\":$events}" >/dev/null 2>&1
+			ubus -t 3 call roamd mesh_log_ingest "{\"id\":\"$id\",\"node\":\"$name\",\"events\":$events}" >/dev/null 2>&1
 		fi
 	else
 		printf '{"online":false}' > "$MEMBERS_DIR/$id.json"
@@ -92,7 +92,7 @@ seen=/tmp/roamd-steer.$$
 : > "$seen"
 
 collect_seen() {
-	local file="$1" id="$2" addr="$3" list mac sig i
+	local file="$1" id="$2" addr="$3" list mac sig con i
 
 	for list in clients heard; do
 		i=0
@@ -102,7 +102,9 @@ collect_seen() {
 			sig=$(jsonfilter -e "@.$list[$i].signal" < "$file" 2>/dev/null)
 			i=$((i + 1))
 			[ -n "$sig" ] || continue
-			printf '%s %s %s %s %s\n' "$mac" "$id" "$addr" "$sig" "$list" >> "$seen"
+			con=0
+			[ "$list" = clients ] && con=$(jsonfilter -e "@.$list[$((i - 1))].connected" < "$file" 2>/dev/null)
+			printf '%s %s %s %s %s %s\n' "$mac" "$id" "$addr" "$sig" "$list" "${con:-0}" >> "$seen"
 		done
 	done
 }
@@ -120,6 +122,29 @@ for sect in $members; do
 	collect_seen "$MEMBERS_DIR/$id.json" "$id" "$addr"
 done
 
+member_call() {
+	local cid="$1" caddr="$2" method="$3" params="$4" session
+
+	if [ "$cid" = controller ]; then
+		ubus -t 3 call roamd "$method" "$params" >/dev/null 2>&1
+		return
+	fi
+
+	session=$(rpc_login "$caddr" "$cid")
+	[ -n "$session" ] && rpc_call "$caddr" "$session" roamd "$method" "$params" "$cid" >/dev/null 2>&1
+}
+
+awk -v ghosts="$seen.ghosts" '
+	NR == FNR { if ($5 == "clients" && $6 > 0 && (!($1 in f) || $6 < f[$1])) f[$1] = $6; next }
+	$5 == "clients" && ($1 in f) && $6 != f[$1] { if ($6 > 0) print $1, $2, $3 > ghosts; next }
+	{ print }' "$seen" "$seen" > "$seen.live"
+mv "$seen.live" "$seen"
+
+[ -f "$seen.ghosts" ] && while read -r gmac gid gaddr; do
+	member_call "$gid" "$gaddr" mesh_drop "{\"mac\":\"$gmac\"}"
+done < "$seen.ghosts"
+rm -f "$seen.ghosts"
+
 node_in() { local a; for a in $2; do [ "$a" = "$1" ] && return 0; done; return 1; }
 
 devices=$(uci -q show roamd | sed -n 's/^roamd\.\(@device\[[0-9]*\]\|[a-z0-9_]*\)=device$/\1/p')
@@ -135,7 +160,7 @@ allowed_nodes_for() {
 for mac in $(awk '{print $1}' "$seen" | sort -u); do
 	allow=$(allowed_nodes_for "$(echo "$mac" | tr 'A-Z' 'a-z')")
 
-	best=$(grep "^$mac " "$seen" | while read -r m cid caddr csig ckind; do
+	best=$(grep "^$mac " "$seen" | while read -r m cid caddr csig ckind _; do
 		{ [ -z "$allow" ] || node_in "$cid" "$allow"; } && printf '%s %s %s %s\n' "$m" "$cid" "$caddr" "$csig"
 	done | sort -k4 -n | tail -1)
 	[ -n "$best" ] || continue
@@ -156,7 +181,7 @@ for mac in $(awk '{print $1}' "$seen" | sort -u); do
 	done
 	[ -n "$neigh" ] || neigh="$any"
 
-	grep "^$mac " "$seen" | while read -r m cid caddr csig ckind; do
+	grep "^$mac " "$seen" | while read -r m cid caddr csig ckind _; do
 		[ "$ckind" = "clients" ] || continue
 		[ "$cid" = "$best_id" ] && continue
 		if [ -n "$allow" ] && ! node_in "$cid" "$allow"; then
@@ -169,13 +194,7 @@ for mac in $(awk '{print $1}' "$seen" | sort -u); do
 		else
 			params="{\"mac\":\"$m\"}"
 		fi
-		if [ "$cid" = "controller" ]; then
-			ubus -t 3 call roamd mesh_steer "$params" >/dev/null 2>&1
-			continue
-		fi
-
-		session=$(rpc_login "$caddr" "$cid")
-		[ -n "$session" ] && rpc_call "$caddr" "$session" roamd mesh_steer "$params" "$cid" >/dev/null 2>&1
+		member_call "$cid" "$caddr" mesh_steer "$params"
 	done
 done
 
@@ -216,12 +235,11 @@ payload=$(json_dump)
 rm -f "$ms"
 
 if [ "$nb" -gt 0 ]; then
-	ubus -t 3 call roamd mesh_neighbors "$payload" >/dev/null 2>&1
+	member_call controller local mesh_neighbors "$payload"
 	for sect in $members; do
 		id=$(uci -q get "roamd.$sect.id")
 		addr=$(uci -q get "roamd.$sect.addr")
 		[ -n "$id" ] && [ -n "$addr" ] || continue
-		session=$(rpc_login "$addr" "$id")
-		[ -n "$session" ] && rpc_call "$addr" "$session" roamd mesh_neighbors "$payload" "$id" >/dev/null 2>&1
+		member_call "$id" "$addr" mesh_neighbors "$payload"
 	done
 fi

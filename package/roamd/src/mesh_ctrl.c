@@ -47,11 +47,14 @@ static char acquire_task[32];
 static char acquire_addr[MESH_ADDR_MAX];
 static const char *acquire_kind = "";
 
-void mesh_ctrl_discover(struct blob_buf *b)
+void mesh_ctrl_discover(bool rescan, struct blob_buf *b)
 {
 	char *data;
 
-	mesh_task_start(&discover_job, MESH_DISCOVER, NULL, NULL);
+	if (rescan && !discover_job.busy) {
+		unlink(CANDIDATES);
+		mesh_task_start(&discover_job, MESH_DISCOVER, NULL, NULL);
+	}
 
 	blobmsg_add_u8(b, "scanning", discover_job.busy);
 
@@ -411,9 +414,7 @@ void mesh_ctrl_backhaul_apply(void)
 		}
 
 		if (!want) {
-			if (!roam_uci_bool(uci_lookup_option_string(u.ctx,
-					uci_lookup_section(u.ctx, u.pkg, name), "disabled")))
-				uci_session_set(&u, name, "disabled", "1");
+			uci_session_set(&u, name, "disabled", "1");
 			continue;
 		}
 
@@ -619,6 +620,7 @@ bool mesh_member_remove(const char *id)
 	uci_session_close(&u);
 
 	if (removed) {
+		mesh_log_forget(id);
 		roam_config_load();
 		mesh_ctrl_backhaul_apply();
 	}

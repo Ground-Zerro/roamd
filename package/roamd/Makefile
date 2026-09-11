@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.0.1-r10
+PKG_VERSION:=1.0.1-r11
 PKG_RELEASE:=
 
 PKG_LICENSE:=GPL-3.0-only
@@ -66,12 +66,6 @@ define Package/roamd/install
 	$(INSTALL_BIN) ./files/net-apply.sh $(1)/usr/libexec/roamd/net-apply.sh
 	$(INSTALL_BIN) ./files/mesh-dumbap.sh $(1)/usr/libexec/roamd/mesh-dumbap.sh
 	$(INSTALL_BIN) ./files/mesh-release.sh $(1)/usr/libexec/roamd/mesh-release.sh
-endef
-
-define Package/roamd/postinst
-#!/bin/sh
-rm -f "$${IPKG_INSTROOT}/etc/roamd/mesh_log.jsonl" "$${IPKG_INSTROOT}/etc/roamd/clients.jsonl"
-exit 0
 endef
 
 $(eval $(call BuildPackage,roamd))

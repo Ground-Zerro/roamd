@@ -130,26 +130,20 @@ msgstr "Не отвечать на запросы поиска и аутенти
 msgid "Force disconnect"
 msgstr "Принудительное отключение"
 
-msgid "Disconnect clients that ignore the roaming request. For devices without 802.11v support this is the only way to move them: until it is enabled, such a client stays on a dying link until it decides to leave on its own, which can take minutes. Some clients reconnect to the same band."
-msgstr "Отключать клиентов, игнорирующих запрос на переход. Для устройств без поддержки 802.11v это единственный способ их сдвинуть: пока настройка выключена, такой клиент держится за умирающую связь, пока не решит уйти сам, — это может занять минуты. Некоторые клиенты переподключаются к тому же диапазону."
-
-msgid "Delay before disconnect"
-msgstr "Задержка перед отключением"
-
-msgid "Milliseconds between the roaming request and the forced disconnect."
-msgstr "Миллисекунды между запросом на переход и принудительным отключением."
+msgid "Disconnect clients without 802.11v support when they have to be moved: they cannot be asked to roam, and until this is enabled such a client stays on a dying link until it decides to leave on its own, which can take minutes. Some clients reconnect to the same band."
+msgstr "Отключать клиентов без поддержки 802.11v, когда их нужно перевести: попросить их о переходе нельзя, и пока настройка выключена, такой клиент держится за умирающую связь, пока не решит уйти сам, — это может занять минуты. Некоторые клиенты переподключаются к тому же диапазону."
 
 msgid "Hold time"
 msgstr "Время удержания"
 
-msgid "Milliseconds to wait before steering the same client again."
-msgstr "Сколько миллисекунд ждать перед повторной попыткой перевода того же устройства."
+msgid "Milliseconds after connecting before the client may be steered."
+msgstr "Сколько миллисекунд после подключения устройство не переводят."
 
 msgid "Steering attempts"
 msgstr "Попыток перевода"
 
-msgid "Give up after this many unsuccessful attempts."
-msgstr "Прекращать попытки после указанного числа неудач."
+msgid "Roaming requests per connection, 5 seconds apart. A client that stays after the last one is left alone until it reconnects."
+msgstr "Сколько запросов на переход отправлять за одно подключение, с паузой 5 секунд. Если устройство осталось после последнего, его не трогают до переподключения."
 
 msgid "Block duration"
 msgstr "Длительность блокировки"
@@ -252,9 +246,6 @@ msgstr "Сигнал по диапазонам"
 
 msgid "unknown"
 msgstr "неизвестно"
-
-msgid "rejected"
-msgstr "отклонено"
 
 msgid "No connected clients"
 msgstr "Нет подключённых устройств"
@@ -657,6 +648,18 @@ msgstr "Пусто — используется репозиторий прое�
 msgid "Broadcast on bands"
 msgstr "Вещается в диапазонах"
 
+msgid "5 GHz advantage for the node link"
+msgstr "Преимущество 5 ГГц для звена узла"
+
+msgid "dB. A node bringing up its wireless link picks 5 GHz if its signal is weaker than 2.4 GHz by no more than this value."
+msgstr "дБ. Поднимая звено по воздуху, узел выбирает 5 ГГц, если его сигнал слабее 2,4 ГГц не больше чем на это значение."
+
+msgid "Minimum 5 GHz signal for the node link"
+msgstr "Минимальный сигнал 5 ГГц для звена узла"
+
+msgid "dBm. A weaker 5 GHz signal is not used for the node link while 2.4 GHz is available."
+msgstr "дБм. Более слабый сигнал 5 ГГц не используется для звена узла, пока доступен 2,4 ГГц."
+
 msgid "not broadcasting"
 msgstr "не вещается"
 
@@ -966,8 +969,14 @@ msgstr "Операция выполняется, это занимает нес�
 msgid "A node is being removed now"
 msgstr "Сейчас идёт удаление узла"
 
-msgid "no roamd package for OpenWrt %s (%s) — build it and put it in the repository"
-msgstr "нет пакета roamd для OpenWrt %s (%s) — соберите его и положите в репозиторий"
+msgid "OpenWrt %s (%s) is not supported: the repository has no roamd package for this version and architecture"
+msgstr "OpenWrt %s (%s) не поддерживается: в репозитории нет пакета roamd для этой версии и архитектуры"
+
+msgid "Could not check for the roamd package for OpenWrt %s (%s): the package repository is unreachable. Check the internet access of the controller and search again"
+msgstr "Не удалось проверить наличие пакета roamd для OpenWrt %s (%s): репозиторий пакетов недоступен. Проверьте доступ контроллера в интернет и повторите поиск"
+
+msgid "curl could not be installed: without it the controller has no access to the package repository and no control channel to the node"
+msgstr "не удалось установить curl: без него контроллеру недоступны репозиторий пакетов и канал управления узлом"
 
 msgid "Update the controller"
 msgstr "Обновить контроллер"
