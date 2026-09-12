@@ -54,16 +54,16 @@ fi
 task_open "$TASK"
 report check progress "checking the repository"
 
-if ! sys_retry 3 5 sys_index_update; then
+if ! outdated=$(self_outdated_packages); then
 	record error
 	report check error "package index is not available"
 	exit 1
 fi
 
-if self_outdated; then
+if [ -n "$outdated" ]; then
 	report update progress "installing packages on the controller"
 
-	if ! self_upgrade; then
+	if ! self_upgrade $outdated; then
 		record error
 		report update error "package installation failed"
 		exit 1

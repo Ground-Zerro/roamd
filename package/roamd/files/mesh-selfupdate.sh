@@ -8,8 +8,8 @@ task_open "$TASK"
 
 report update progress "installing packages on the controller"
 
-sys_retry 3 5 sys_index_update || fail update "package index is not available"
-self_upgrade || fail update "package installation failed"
+outdated=$(self_outdated_packages) || fail update "package index is not available"
+self_upgrade $outdated || fail update "package installation failed"
 
 report done ok updated
 

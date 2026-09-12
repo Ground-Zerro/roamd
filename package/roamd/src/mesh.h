@@ -169,7 +169,12 @@ bool mesh_client_set(const char *mac, const char *band, const char *alias, const
 void mesh_neighbors_set(struct blob_attr *arr);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
 
-void mesh_ctrl_discover(bool rescan, bool stop, struct blob_buf *b);
+enum mesh_job_kind {
+	MESH_JOB_DISCOVER,
+	MESH_JOB_SELF_CHECK,
+};
+
+void mesh_ctrl_job(enum mesh_job_kind kind, bool start, bool stop, struct blob_buf *b);
 void mesh_ctrl_acquire(const char *addr, struct blob_buf *b);
 void mesh_ctrl_acquire_blob(struct blob_buf *b);
 bool mesh_ctrl_acquire_mac(uint8_t *out);

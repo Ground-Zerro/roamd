@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <endian.h>
-#include <zlib.h>
 
 #include "roamd.h"
 
@@ -31,9 +30,51 @@
 #define ADBI_PI_HASHES		3
 #define ADBI_PI_FILE_SIZE	13
 
+#define DEFLATE_MAXBITS		15
+#define DEFLATE_MAXLCODES	286
+#define DEFLATE_MAXDCODES	30
+#define DEFLATE_FIXLCODES	288
+#define DEFLATE_OUT_MIN		65536
+
 struct adb {
 	const uint8_t *ptr;
 	size_t len;
+};
+
+struct deflate {
+	const uint8_t *in;
+	size_t in_len;
+	size_t in_pos;
+	uint32_t bitbuf;
+	int bitcnt;
+	uint8_t *out;
+	size_t out_len;
+	size_t out_cap;
+};
+
+struct huffman {
+	short count[DEFLATE_MAXBITS + 1];
+	short symbol[DEFLATE_FIXLCODES];
+};
+
+static const short length_base[29] = {
+	3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
+	35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258
+};
+
+static const short length_extra[29] = {
+	0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+	3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0
+};
+
+static const short dist_base[30] = {
+	1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+	257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577
+};
+
+static const short dist_extra[30] = {
+	0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+	7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
 };
 
 static uint32_t le32_at(const uint8_t *p)
@@ -52,12 +93,269 @@ static uint64_t le64_at(const uint8_t *p)
 	return le64toh(v);
 }
 
+static int deflate_bits(struct deflate *d, int need)
+{
+	uint32_t val = d->bitbuf;
+
+	while (d->bitcnt < need) {
+		if (d->in_pos == d->in_len)
+			return -1;
+		val |= (uint32_t)d->in[d->in_pos++] << d->bitcnt;
+		d->bitcnt += 8;
+	}
+
+	d->bitbuf = val >> need;
+	d->bitcnt -= need;
+
+	return val & ((1u << need) - 1);
+}
+
+static bool deflate_reserve(struct deflate *d, size_t n)
+{
+	size_t cap = d->out_cap ? d->out_cap : DEFLATE_OUT_MIN;
+	uint8_t *grown;
+
+	if (d->out_len + n <= d->out_cap)
+		return true;
+
+	while (cap < d->out_len + n)
+		cap *= 2;
+
+	if (cap > APK_FILE_MAX)
+		return false;
+
+	grown = realloc(d->out, cap);
+	if (!grown)
+		return false;
+
+	d->out = grown;
+	d->out_cap = cap;
+
+	return true;
+}
+
+static int huffman_build(struct huffman *h, const short *length, int n)
+{
+	short offs[DEFLATE_MAXBITS + 1];
+	int symbol, len, left = 1;
+
+	memset(h->count, 0, sizeof(h->count));
+
+	for (symbol = 0; symbol < n; symbol++)
+		h->count[length[symbol]]++;
+
+	if (h->count[0] == n)
+		return 0;
+
+	for (len = 1; len <= DEFLATE_MAXBITS; len++) {
+		left <<= 1;
+		left -= h->count[len];
+		if (left < 0)
+			return left;
+	}
+
+	offs[1] = 0;
+	for (len = 1; len < DEFLATE_MAXBITS; len++)
+		offs[len + 1] = offs[len] + h->count[len];
+
+	for (symbol = 0; symbol < n; symbol++)
+		if (length[symbol])
+			h->symbol[offs[length[symbol]]++] = symbol;
+
+	return left;
+}
+
+static int huffman_decode(struct deflate *d, const struct huffman *h)
+{
+	int code = 0, first = 0, index = 0, len, bit;
+
+	for (len = 1; len <= DEFLATE_MAXBITS; len++) {
+		bit = deflate_bits(d, 1);
+		if (bit < 0)
+			return -1;
+
+		code |= bit;
+		if (code - h->count[len] < first)
+			return h->symbol[index + (code - first)];
+
+		index += h->count[len];
+		first = (first + h->count[len]) << 1;
+		code <<= 1;
+	}
+
+	return -1;
+}
+
+static int deflate_stored(struct deflate *d)
+{
+	const uint8_t *p = d->in + d->in_pos;
+	unsigned len;
+
+	d->bitbuf = 0;
+	d->bitcnt = 0;
+
+	if (d->in_len - d->in_pos < 4)
+		return -1;
+
+	len = p[0] | p[1] << 8;
+	if (p[2] != (~len & 0xff) || p[3] != ((~len >> 8) & 0xff))
+		return -1;
+
+	d->in_pos += 4;
+	if (d->in_len - d->in_pos < len || !deflate_reserve(d, len))
+		return -1;
+
+	memcpy(d->out + d->out_len, d->in + d->in_pos, len);
+	d->out_len += len;
+	d->in_pos += len;
+
+	return 0;
+}
+
+static int deflate_codes(struct deflate *d, const struct huffman *lencode,
+			 const struct huffman *distcode)
+{
+	int symbol, extra;
+	size_t len, dist;
+
+	for (;;) {
+		symbol = huffman_decode(d, lencode);
+		if (symbol < 0)
+			return -1;
+
+		if (symbol == 256)
+			return 0;
+
+		if (symbol < 256) {
+			if (!deflate_reserve(d, 1))
+				return -1;
+			d->out[d->out_len++] = symbol;
+			continue;
+		}
+
+		symbol -= 257;
+		if (symbol >= 29 || (extra = deflate_bits(d, length_extra[symbol])) < 0)
+			return -1;
+		len = length_base[symbol] + extra;
+
+		symbol = huffman_decode(d, distcode);
+		if (symbol < 0 || symbol >= 30 || (extra = deflate_bits(d, dist_extra[symbol])) < 0)
+			return -1;
+		dist = dist_base[symbol] + extra;
+
+		if (dist > d->out_len || !deflate_reserve(d, len))
+			return -1;
+
+		while (len--) {
+			d->out[d->out_len] = d->out[d->out_len - dist];
+			d->out_len++;
+		}
+	}
+}
+
+static int deflate_fixed(struct deflate *d)
+{
+	struct huffman lencode, distcode;
+	short lengths[DEFLATE_FIXLCODES];
+	int symbol;
+
+	for (symbol = 0; symbol < 144; symbol++)
+		lengths[symbol] = 8;
+	for (; symbol < 256; symbol++)
+		lengths[symbol] = 9;
+	for (; symbol < 280; symbol++)
+		lengths[symbol] = 7;
+	for (; symbol < DEFLATE_FIXLCODES; symbol++)
+		lengths[symbol] = 8;
+	huffman_build(&lencode, lengths, DEFLATE_FIXLCODES);
+
+	for (symbol = 0; symbol < DEFLATE_MAXDCODES; symbol++)
+		lengths[symbol] = 5;
+	huffman_build(&distcode, lengths, DEFLATE_MAXDCODES);
+
+	return deflate_codes(d, &lencode, &distcode);
+}
+
+static int deflate_dynamic(struct deflate *d)
+{
+	static const short order[19] = {
+		16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
+	};
+	short lengths[DEFLATE_MAXLCODES + DEFLATE_MAXDCODES];
+	struct huffman lencode, distcode;
+	int nlen, ndist, ncode, index, symbol, repeat, err;
+	short len;
+
+	nlen = deflate_bits(d, 5);
+	ndist = deflate_bits(d, 5);
+	ncode = deflate_bits(d, 4);
+	if (nlen < 0 || ndist < 0 || ncode < 0)
+		return -1;
+
+	nlen += 257;
+	ndist += 1;
+	ncode += 4;
+	if (nlen > DEFLATE_MAXLCODES || ndist > DEFLATE_MAXDCODES)
+		return -1;
+
+	for (index = 0; index < 19; index++) {
+		symbol = index < ncode ? deflate_bits(d, 3) : 0;
+		if (symbol < 0)
+			return -1;
+		lengths[order[index]] = symbol;
+	}
+
+	if (huffman_build(&lencode, lengths, 19))
+		return -1;
+
+	for (index = 0; index < nlen + ndist; ) {
+		symbol = huffman_decode(d, &lencode);
+		if (symbol < 0)
+			return -1;
+
+		if (symbol < 16) {
+			lengths[index++] = symbol;
+			continue;
+		}
+
+		len = 0;
+		if (symbol == 16) {
+			if (!index)
+				return -1;
+			len = lengths[index - 1];
+			repeat = deflate_bits(d, 2) + 3;
+		} else if (symbol == 17) {
+			repeat = deflate_bits(d, 3) + 3;
+		} else {
+			repeat = deflate_bits(d, 7) + 11;
+		}
+
+		if (repeat < 3 || index + repeat > nlen + ndist)
+			return -1;
+
+		while (repeat--)
+			lengths[index++] = len;
+	}
+
+	if (!lengths[256])
+		return -1;
+
+	err = huffman_build(&lencode, lengths, nlen);
+	if (err < 0 || (err > 0 && nlen - lencode.count[0] != 1))
+		return -1;
+
+	err = huffman_build(&distcode, lengths + nlen, ndist);
+	if (err < 0 || (err > 0 && ndist - distcode.count[0] != 1))
+		return -1;
+
+	return deflate_codes(d, &lencode, &distcode);
+}
+
 static uint8_t *adb_inflate(const uint8_t *in, size_t in_len, size_t *out_len)
 {
-	size_t cap = in_len * 4, used = 0;
-	uint8_t *out, *grown;
-	int r = Z_OK;
-	z_stream zs;
+	struct deflate d = { .in = in + 4, .in_len = in_len - 4 };
+	int last, type, err;
+	uint8_t *out;
 
 	if (in_len < 4 || memcmp(in, "ADB", 3))
 		return NULL;
@@ -74,38 +372,29 @@ static uint8_t *adb_inflate(const uint8_t *in, size_t in_len, size_t *out_len)
 	if (in[3] != 'd')
 		return NULL;
 
-	memset(&zs, 0, sizeof(zs));
-	if (inflateInit2(&zs, -MAX_WBITS) != Z_OK)
-		return NULL;
+	do {
+		last = deflate_bits(&d, 1);
+		type = deflate_bits(&d, 2);
 
-	out = malloc(cap);
-	zs.next_in = (Bytef *)in + 4;
-	zs.avail_in = in_len - 4;
+		if (last < 0 || type < 0)
+			err = -1;
+		else if (type == 0)
+			err = deflate_stored(&d);
+		else if (type == 1)
+			err = deflate_fixed(&d);
+		else if (type == 2)
+			err = deflate_dynamic(&d);
+		else
+			err = -1;
+	} while (!err && !last);
 
-	while (out && r == Z_OK) {
-		if (used == cap) {
-			grown = cap < APK_FILE_MAX ? realloc(out, cap * 2) : NULL;
-			if (!grown)
-				break;
-			out = grown;
-			cap *= 2;
-		}
-
-		zs.next_out = out + used;
-		zs.avail_out = cap - used;
-		r = inflate(&zs, Z_NO_FLUSH);
-		used = cap - zs.avail_out;
-	}
-
-	inflateEnd(&zs);
-
-	if (r != Z_STREAM_END) {
-		free(out);
+	if (err) {
+		free(d.out);
 		return NULL;
 	}
 
-	*out_len = used;
-	return out;
+	*out_len = d.out_len;
+	return d.out;
 }
 
 static uint8_t *apk_file_inflate(const char *path, size_t *len)

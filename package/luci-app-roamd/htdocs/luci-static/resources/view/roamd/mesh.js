@@ -22,6 +22,7 @@ var callMeshClients = rpc.declare({
 var callMeshSelfCheck = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_self_check',
+	params: [ 'start', 'stop' ],
 	expect: { }
 });
 
@@ -42,14 +43,7 @@ var callMeshClientUpdate = rpc.declare({
 var callMeshDiscover = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_discover',
-	params: [ 'rescan' ],
-	expect: { }
-});
-
-var callMeshDiscoverStop = rpc.declare({
-	object: 'roamd',
-	method: 'mesh_discover',
-	params: [ 'stop' ],
+	params: [ 'start', 'stop' ],
 	expect: { }
 });
 
@@ -310,46 +304,71 @@ function acquireStepText(step) {
 	return ACQUIRE_STEP[step] || step;
 }
 
-function discoverDialog() {
-	var body = E('div', {}, [ E('p', { 'class': 'spinning' }, _('Scanning the local network…')) ]);
+var JOB_POLL_INTERVAL = 3000;
+var SELF_CHECK_LIMIT = 300000;
+
+function runJob(call, limit, done) {
 	var open = true;
+	var deadline = Date.now() + limit;
 
-	function close() {
-		open = false;
-		ui.hideModal();
-		callMeshDiscoverStop(true);
-	}
+	var fail = function() {
+		call(false, true);
+		done(null);
+	};
 
-	ui.showModal(_('Add a new node'), [
-		body,
-		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn', 'click': close }, _('Close'))
-		])
-	]);
-
-	var tick = function(rescan) {
-		callMeshDiscover(rescan).then(function(res) {
+	var tick = function(start) {
+		call(start).then(function(res) {
 			if (!open)
 				return;
 
 			res = res || {};
-			var list = res.candidates || [];
 
-			if (res.scanning) {
-				window.setTimeout(function() { tick(false); }, 3000);
-				return;
-			}
-
-			if (!list.length) {
-				dom.content(body, E('p', {}, _('No devices found. Reset the new device to factory settings and make sure it has no password, then try again.')));
-				return;
-			}
-
-			dom.content(body, list.map(renderCandidate));
+			if (!res.running)
+				done(res);
+			else if (Date.now() < deadline)
+				window.setTimeout(function() { tick(false); }, JOB_POLL_INTERVAL);
+			else
+				fail();
+		}, function() {
+			if (open)
+				fail();
 		});
 	};
 
 	tick(true);
+
+	return function() {
+		open = false;
+		ui.hideModal();
+		call(false, true);
+	};
+}
+
+function discoverDialog() {
+	var body = E('div', {}, [ E('p', { 'class': 'spinning' }, _('Scanning the local network…')) ]);
+
+	ui.showModal(_('Add a new node'), [
+		body,
+		E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': function() { cancel(); } }, _('Close'))
+		])
+	]);
+
+	var cancel = runJob(callMeshDiscover, Infinity, function(res) {
+		if (!res) {
+			dom.content(body, E('p', { 'class': 'alert-message warning' }, _('Could not scan the local network.')));
+			return;
+		}
+
+		var list = res.candidates || [];
+
+		if (!list.length) {
+			dom.content(body, E('p', {}, _('No devices found. Reset the new device to factory settings and make sure it has no password, then try again.')));
+			return;
+		}
+
+		dom.content(body, list.map(renderCandidate));
+	});
 }
 
 var PKG_STATE_TEXT = {
@@ -638,16 +657,17 @@ function controllerRow(state) {
 }
 
 function checkSelfUpdate() {
-	var body = E('div', {}, E('p', { 'class': 'spinning' }, _('Checking the repository…')));
+	var body = E('div', {}, [
+		E('p', { 'class': 'spinning' }, _('Checking the repository…')),
+		E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': function() { cancel(); } }, _('Cancel')))
+	]);
 
 	ui.showModal(_('Check for updates'), [ body ]);
 
-	callMeshSelfCheck().then(function(res) {
-		res = res || {};
-
-		if (res.error === 'no_repository') {
+	var cancel = runJob(callMeshSelfCheck, SELF_CHECK_LIMIT, function(res) {
+		if (!res) {
 			dom.content(body, [
-				E('p', {}, _('The roamd package repository is not connected on this device. Run install.sh again to add it.')),
+				E('p', { 'class': 'alert-message warning' }, _('The check failed.')),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
@@ -691,11 +711,6 @@ function checkSelfUpdate() {
 				])
 			].concat(rows)),
 			E('div', { 'class': 'right' }, buttons)
-		]);
-	}, function() {
-		dom.content(body, [
-			E('p', { 'class': 'alert-message warning' }, _('The check failed.')),
-			E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 		]);
 	});
 }

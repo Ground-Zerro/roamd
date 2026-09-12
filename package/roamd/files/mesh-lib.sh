@@ -182,12 +182,10 @@ sys_add() {
 	esac
 }
 
-sys_upgrade() {
-	[ "$#" -gt 0 ] || return 1
-
+sys_add_files() {
 	case "$(sys_mgr)" in
-		apk) apk upgrade "$@" >/dev/null 2>&1 ;;
-		opkg) opkg upgrade "$@" >/dev/null 2>&1 ;;
+		apk) apk add --allow-untrusted "$@" >/dev/null 2>&1 ;;
+		opkg) opkg install "$@" >/dev/null 2>&1 ;;
 		*) return 1 ;;
 	esac
 }
@@ -206,19 +204,6 @@ sys_installed() {
 	case "$(sys_mgr)" in
 		apk) version=$(sed -n "/^P:$1\$/,/^\$/s/^V://p" /lib/apk/db/installed 2>/dev/null | head -1) ;;
 		opkg) version=$(opkg list-installed 2>/dev/null | awk -v n="$1" '$1 == n { print $3 }' | head -1) ;;
-	esac
-
-	[ -n "$version" ] || return 1
-
-	echo "$version"
-}
-
-sys_available() {
-	local version
-
-	case "$(sys_mgr)" in
-		apk) version=$(apk list -u "$1" 2>/dev/null | awk 'NR == 1 { print $1 }' | sed "s/^$1-//") ;;
-		opkg) version=$(opkg list-upgradable 2>/dev/null | awk -v n="$1" '$1 == n { print $NF }' | head -1) ;;
 	esac
 
 	[ -n "$version" ] || return 1
@@ -575,26 +560,58 @@ self_packages() {
 	echo "$names"
 }
 
-self_outdated() {
+self_release() {
+	. /etc/openwrt_release
+	echo "${DISTRIB_RELEASE%.*} $DISTRIB_ARCH"
+}
+
+self_target() {
+	local meta
+
+	meta=$(pkg_index_meta $(self_release) "$1") || return $?
+	echo "$meta" | cut -d' ' -f3
+}
+
+self_versions() {
 	local name have want
+
+	ensure_curl || return 2
 
 	for name in $(self_packages); do
 		have=$(sys_installed "$name") || continue
-		want=$(sys_available "$name") || continue
-		[ "$want" != "$have" ] && return 0
+		want=$(self_target "$name")
+		case $? in
+			0) ;;
+			1) want="$have" ;;
+			*) return 2 ;;
+		esac
+		echo "$name $have $want"
+	done
+}
+
+self_outdated_packages() {
+	local versions name have want
+
+	versions=$(self_versions) || return 2
+
+	echo "$versions" | while read -r name have want; do
+		[ -n "$name" ] && sys_newer "$want" "$have" && echo "$name"
 	done
 
-	return 1
+	return 0
 }
 
 self_upgrade() {
-	local names
+	local name pkg files=""
 
-	names=$(self_packages)
-	[ -n "$names" ] || return 1
+	[ "$#" -gt 0 ] || return 1
 
-	# shellcheck disable=SC2086
-	sys_retry 3 10 sys_upgrade $names
+	for name in "$@"; do
+		pkg=$(pkg_fetch $(self_release) "$name") || return 1
+		files="$files $pkg"
+	done
+
+	sys_add_files $files || { sys_index_update && sys_add_files $files; }
 }
 
 lan_device() {

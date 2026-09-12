@@ -22,7 +22,9 @@
 #define MESH_POLL	"/usr/libexec/roamd/mesh-poll-all.sh"
 #define MESH_AUTOUPDATE	"/usr/libexec/roamd/mesh-autoupdate.sh"
 #define MESH_RELEASE	"/usr/libexec/roamd/mesh-release.sh"
+#define MESH_SELFCHECK	"/usr/libexec/roamd/mesh-selfcheck.sh"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
+#define SELFCHECK	"/var/run/roamd/selfcheck.json"
 #define ACQUIRE_DIR	"/var/run/roamd/acquire"
 #define MEMBERS_DIR	"/var/run/roamd/members"
 #define MESH_POLL_INTERVAL	15000
@@ -32,14 +34,23 @@
 #define AUTOUPDATE_BUSY_RETRY	300000
 #define AUTOUPDATE_FAIL_RETRY	1800
 
-static void discover_done(struct mesh_task *task, int ret);
+struct mesh_job {
+	struct mesh_task task;
+	const char *script;
+	const char *result;
+	bool restart;
+};
+
+static void job_done(struct mesh_task *task, int ret);
 static void acquire_done(struct mesh_task *task, int ret);
 static void sync_done(struct mesh_task *task, int ret);
 
 static bool sync_pending;
-static bool discover_restart;
 
-static struct mesh_task discover_job = { .done = discover_done };
+static struct mesh_job jobs[] = {
+	[MESH_JOB_DISCOVER] = { .task.done = job_done, .script = MESH_DISCOVER, .result = CANDIDATES },
+	[MESH_JOB_SELF_CHECK] = { .task.done = job_done, .script = MESH_SELFCHECK, .result = SELFCHECK },
+};
 static struct mesh_task acquire_job = { .done = acquire_done };
 static struct mesh_task poll_job;
 static struct mesh_task sync_job = { .done = sync_done };
@@ -49,45 +60,46 @@ static char acquire_task[32];
 static char acquire_addr[MESH_ADDR_MAX];
 static const char *acquire_kind = "";
 
-static void discover_start(void)
+static void job_start(struct mesh_job *job)
 {
-	unlink(CANDIDATES);
-	mesh_task_start(&discover_job, MESH_DISCOVER, NULL, NULL);
+	unlink(job->result);
+	mesh_task_start(&job->task, job->script, NULL, NULL);
 }
 
-static void discover_done(struct mesh_task *task, int ret)
+static void job_done(struct mesh_task *task, int ret)
 {
-	if (!discover_restart)
+	struct mesh_job *job = container_of(task, struct mesh_job, task);
+
+	if (!job->restart)
 		return;
 
-	discover_restart = false;
-	discover_start();
+	job->restart = false;
+	job_start(job);
 }
 
-void mesh_ctrl_discover(bool rescan, bool stop, struct blob_buf *b)
+void mesh_ctrl_job(enum mesh_job_kind kind, bool start, bool stop, struct blob_buf *b)
 {
+	struct mesh_job *job = &jobs[kind];
 	char *data;
 
 	if (stop) {
-		discover_restart = false;
-		mesh_task_stop(&discover_job);
-	} else if (rescan && discover_job.busy) {
-		discover_restart = true;
-		mesh_task_stop(&discover_job);
-	} else if (rescan) {
-		discover_start();
+		job->restart = false;
+		mesh_task_stop(&job->task);
+	} else if (start && job->task.busy) {
+		job->restart = true;
+		mesh_task_stop(&job->task);
+	} else if (start) {
+		job_start(job);
 	}
 
-	blobmsg_add_u8(b, "scanning", discover_job.busy);
+	blobmsg_add_u8(b, "running", job->task.busy);
 
-	data = mesh_slurp(CANDIDATES, 32768);
-	if (data) {
-		blobmsg_add_json_from_string(b, data);
-		free(data);
-	} else {
-		void *a = blobmsg_open_array(b, "candidates");
-		blobmsg_close_array(b, a);
-	}
+	data = mesh_slurp(job->result, 32768);
+	if (!data)
+		return;
+
+	blobmsg_add_json_from_string(b, data);
+	free(data);
 }
 
 static bool acquire_mac_read(char *out, size_t size)

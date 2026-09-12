@@ -488,6 +488,9 @@ msgstr "Сохранение…"
 msgid "Scanning the local network…"
 msgstr "Сканирование локальной сети…"
 
+msgid "Could not scan the local network."
+msgstr "Не удалось просканировать локальную сеть."
+
 msgid "Settings"
 msgstr "Настройки"
 
@@ -782,9 +785,6 @@ msgstr "Проверить обновления"
 
 msgid "Checking the repository…"
 msgstr "Проверяем репозиторий…"
-
-msgid "The roamd package repository is not connected on this device. Run install.sh again to add it."
-msgstr "Репозиторий roamd не подключён на этом устройстве. Запустите install.sh ещё раз, чтобы его добавить."
 
 msgid "The repository is unreachable."
 msgstr "Репозиторий недоступен."

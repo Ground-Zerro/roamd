@@ -43,7 +43,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="1.0.0-rc1"
+            version="1.0.1-r14"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 

@@ -290,7 +290,7 @@ enum {
 	MESH_ARG_NODES,
 	MESH_ARG_NEIGHBORS,
 	MESH_ARG_RESET,
-	MESH_ARG_RESCAN,
+	MESH_ARG_START,
 	MESH_ARG_STOP,
 	__MESH_ARG_MAX
 };
@@ -306,13 +306,13 @@ static const struct blobmsg_policy mesh_arg_policy[__MESH_ARG_MAX] = {
 	[MESH_ARG_NODES] = { .name = "nodes", .type = BLOBMSG_TYPE_STRING },
 	[MESH_ARG_NEIGHBORS] = { .name = "neighbors", .type = BLOBMSG_TYPE_ARRAY },
 	[MESH_ARG_RESET] = { .name = "reset", .type = BLOBMSG_TYPE_STRING },
-	[MESH_ARG_RESCAN] = { .name = "rescan", .type = BLOBMSG_TYPE_BOOL },
+	[MESH_ARG_START] = { .name = "start", .type = BLOBMSG_TYPE_BOOL },
 	[MESH_ARG_STOP] = { .name = "stop", .type = BLOBMSG_TYPE_BOOL },
 };
 
-static int roamd_mesh_discover(struct ubus_context *ctx, struct ubus_object *obj,
-			struct ubus_request_data *req, const char *method,
-			struct blob_attr *msg)
+static int roamd_mesh_job(struct ubus_context *ctx, struct ubus_object *obj,
+			  struct ubus_request_data *req, const char *method,
+			  struct blob_attr *msg)
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
@@ -322,8 +322,9 @@ static int roamd_mesh_discover(struct ubus_context *ctx, struct ubus_object *obj
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 
 	blob_buf_init(&b, 0);
-	mesh_ctrl_discover(tb[MESH_ARG_RESCAN] && blobmsg_get_bool(tb[MESH_ARG_RESCAN]),
-			   tb[MESH_ARG_STOP] && blobmsg_get_bool(tb[MESH_ARG_STOP]), &b);
+	mesh_ctrl_job(strcmp(method, "mesh_discover") ? MESH_JOB_SELF_CHECK : MESH_JOB_DISCOVER,
+		      tb[MESH_ARG_START] && blobmsg_get_bool(tb[MESH_ARG_START]),
+		      tb[MESH_ARG_STOP] && blobmsg_get_bool(tb[MESH_ARG_STOP]), &b);
 	ubus_send_reply(ctx, req, b.head);
 
 	return 0;
@@ -647,41 +648,6 @@ static int roamd_mesh_client_forget(struct ubus_context *ctx, struct ubus_object
 	return 0;
 }
 
-static int roamd_mesh_self_check(struct ubus_context *ctx, struct ubus_object *obj,
-			struct ubus_request_data *req, const char *method,
-			struct blob_attr *msg)
-{
-	char *out;
-	FILE *f;
-	size_t n;
-
-	if (mesh.role != MESH_CONTROLLER)
-		return UBUS_STATUS_PERMISSION_DENIED;
-
-	f = popen("/usr/libexec/roamd/mesh-selfcheck.sh 2>/dev/null", "r");
-	if (!f)
-		return UBUS_STATUS_UNKNOWN_ERROR;
-
-	out = calloc(1, 4096);
-	if (!out) {
-		pclose(f);
-		return UBUS_STATUS_UNKNOWN_ERROR;
-	}
-
-	n = fread(out, 1, 4095, f);
-	pclose(f);
-	out[n] = '\0';
-
-	blob_buf_init(&b, 0);
-	if (!blobmsg_add_json_from_string(&b, out))
-		blobmsg_add_string(&b, "error", "check_failed");
-	free(out);
-
-	ubus_send_reply(ctx, req, b.head);
-
-	return 0;
-}
-
 static int roamd_mesh_neighbors(struct ubus_context *ctx, struct ubus_object *obj,
 			struct ubus_request_data *req, const char *method,
 			struct blob_attr *msg)
@@ -746,14 +712,14 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD_NOARG("mesh_status", roamd_mesh_status),
 	UBUS_METHOD_NOARG("mesh_clients", roamd_mesh_clients),
 	UBUS_METHOD_NOARG("mesh_role", roamd_mesh_role),
-	UBUS_METHOD("mesh_discover", roamd_mesh_discover, mesh_arg_policy),
+	UBUS_METHOD("mesh_discover", roamd_mesh_job, mesh_arg_policy),
 	UBUS_METHOD("mesh_acquire", roamd_mesh_acquire, mesh_arg_policy),
 	UBUS_METHOD("mesh_acquire_status", roamd_mesh_acquire_status, mesh_arg_policy),
 	UBUS_METHOD("mesh_member_remove", roamd_mesh_member_remove, mesh_arg_policy),
 	UBUS_METHOD("mesh_member_update", roamd_mesh_member_update, mesh_arg_policy),
 	UBUS_METHOD("mesh_client_update", roamd_mesh_client_update, mesh_arg_policy),
 	UBUS_METHOD("mesh_client_forget", roamd_mesh_client_forget, mesh_arg_policy),
-	UBUS_METHOD_NOARG("mesh_self_check", roamd_mesh_self_check),
+	UBUS_METHOD("mesh_self_check", roamd_mesh_job, mesh_arg_policy),
 	UBUS_METHOD("mesh_update", roamd_mesh_update, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_self_update", roamd_mesh_self_update),
 	UBUS_METHOD("mesh_settings", roamd_mesh_settings, settings_policy),

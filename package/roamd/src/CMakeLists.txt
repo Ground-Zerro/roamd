@@ -23,6 +23,6 @@ set(SOURCES
 )
 
 add_executable(roamd ${SOURCES})
-target_link_libraries(roamd ubox ubus uci blobmsg_json z)
+target_link_libraries(roamd ubox ubus uci blobmsg_json)
 
 install(TARGETS roamd RUNTIME DESTINATION sbin)
