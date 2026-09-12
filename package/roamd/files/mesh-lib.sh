@@ -266,30 +266,55 @@ feed_url() {
 
 pkg_get() {
 	if [ -f "$PKG_CERT" ]; then
-		curl -q -sL --max-time 20 --cacert "$PKG_CERT" "$1" -o "${2:--}"
+		curl -q -sfL --max-time 20 --cacert "$PKG_CERT" "$1" -o "${2:--}"
 	else
-		curl -q -sL --max-time 20 "$1" -o "${2:--}"
+		curl -q -sfL --max-time 20 "$1" -o "${2:--}"
 	fi
 }
 
 pkg_index_meta() {
-	local url index meta name="${3:-$PKG_MAIN}"
+	local url index adb rc meta name="${3:-$PKG_MAIN}"
 
 	url=$(feed_url "$1" "$2") || return 2
 
 	index=$(pkg_get "$url/Packages")
-	[ -n "$index" ] || return 2
+	rc=$?
 
-	meta=$(printf '%s\n' "$index" | awk -v want="Package: $name" '
-		$0 == want { in_pkg = 1 }
-		/^$/ { in_pkg = 0 }
-		in_pkg && /^Version:/ { version = $2 }
-		in_pkg && /^Filename:/ { name = $2 }
-		in_pkg && /^SHA256sum:/ { sum = $2 }
-		END { if (name != "" && sum != "") print name, sum, version }')
+	if [ "$rc" = 0 ]; then
+		meta=$(printf '%s\n' "$index" | awk -v want="Package: $name" '
+			$0 == want { in_pkg = 1 }
+			/^$/ { in_pkg = 0 }
+			in_pkg && /^Version:/ { version = $2 }
+			in_pkg && /^Filename:/ { name = $2 }
+			in_pkg && /^SHA256sum:/ { sum = $2 }
+			END { if (name != "" && sum != "") print name, sum, version, "file" }')
+	else
+		[ "$rc" = 22 ] || return 2
+
+		adb=$(mktemp)
+		pkg_get "$url/packages.adb" "$adb"
+		rc=$?
+		[ "$rc" = 0 ] && meta=$(roamd apk-index "$adb" |
+			awk -v want="$name" '$1 == want { print want "-" $2 ".apk", $4, $2, "adb" }')
+		rm -f "$adb"
+
+		case $rc in
+			0) ;;
+			22) return 1 ;;
+			*) return 2 ;;
+		esac
+	fi
+
 	[ -n "$meta" ] || return 1
 
 	echo "$meta"
+}
+
+pkg_digest() {
+	case "$2" in
+		adb) roamd apk-block "$1" 2>/dev/null | sha256sum ;;
+		*) sha256sum "$1" 2>/dev/null ;;
+	esac | cut -d' ' -f1
 }
 
 pkg_version() {
@@ -297,7 +322,7 @@ pkg_version() {
 
 	meta=$(pkg_index_meta "$1" "$2" "$name")
 	if [ -n "$meta" ]; then
-		echo "${meta##* }"
+		echo "$meta" | cut -d' ' -f3
 		return 0
 	fi
 
@@ -311,20 +336,21 @@ pkg_version() {
 }
 
 pkg_fetch() {
-	local branch="$1" arch="$2" meta name sum path
+	local branch="$1" arch="$2" meta name sum kind path
 
 	meta=$(pkg_index_meta "$branch" "$arch" "${3:-$PKG_MAIN}")
 	[ -n "$meta" ] || return 1
 
 	name=${meta%% *}
 	sum=$(echo "$meta" | cut -d' ' -f2)
+	kind=${meta##* }
 
 	path="$PKG_DIR/$branch/$arch/$name"
 	mkdir -p "$PKG_DIR/$branch/$arch"
 
-	if ! echo "$sum  $path" | sha256sum -c >/dev/null 2>&1; then
+	if [ "$(pkg_digest "$path" "$kind")" != "$sum" ]; then
 		pkg_get "$(feed_url "$branch" "$arch")/$name" "$path" || { rm -f "$path"; return 1; }
-		echo "$sum  $path" | sha256sum -c >/dev/null 2>&1 || { rm -f "$path"; return 1; }
+		[ "$(pkg_digest "$path" "$kind")" = "$sum" ] || { rm -f "$path"; return 1; }
 	fi
 
 	echo "$path"
@@ -571,11 +597,13 @@ self_upgrade() {
 	sys_retry 3 10 sys_upgrade $names
 }
 
+lan_device() {
+	ubus -t 3 call network.interface.lan status 2>/dev/null | jsonfilter -e '@.l3_device'
+}
+
 lan_subnets() {
-	ip -4 -o addr show scope global | while read -r _ dev _ cidr _; do
-		case "$dev" in lo|*:*) continue;; esac
-		local prefix="${cidr#*/}"
-		[ "$prefix" -ge 24 ] || continue
+	ip -4 -o addr show dev "$(lan_device)" scope global 2>/dev/null | while read -r _ _ _ cidr _; do
+		[ "${cidr#*/}" -ge 24 ] || continue
 		case "$cidr" in
 			10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "$cidr";;
 		esac
@@ -599,7 +627,7 @@ node_addr_by_mac() {
 		warm_subnet "$(subnet_base "$sub")"
 	done
 
-	ip neigh show | awk -v m="$mac" '$4 == "lladdr" && tolower($5) == tolower(m) { print $1; exit }'
+	ip neigh show dev "$(lan_device)" | awk -v m="$mac" '$2 == "lladdr" && tolower($3) == tolower(m) { print $1; exit }'
 }
 
 node_wait_by_mac() {
@@ -622,32 +650,15 @@ own_addrs() {
 	ip -4 -o addr show scope global | while read -r _ _ _ cidr _; do echo "${cidr%/*}"; done
 }
 
-lan_devices() {
-	ip -4 -o addr show scope global | while read -r _ dev _ cidr _; do
-		case "$dev" in lo|*:*) continue;; esac
-		case "$cidr" in
-			10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo "$dev";;
-		esac
-	done | sort -u
-}
-
-warm_v6() {
-	local dev
-
-	for dev in $(lan_devices); do
-		ping6 -c 2 -w 2 "ff02::1%$dev" >/dev/null 2>&1
-	done
-}
-
 ll_neighbours() {
-	local self
+	local dev="$1" self
 
-	warm_v6
-	self=$(ip -6 -o addr show scope link 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 | tr '\n' ' ')
+	ping6 -c 2 -w 2 "ff02::1%$dev" >/dev/null 2>&1
+	self=$(ip -6 -o addr show dev "$dev" scope link 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 | tr '\n' ' ')
 
-	ip -6 neigh show 2>/dev/null | awk -v self="$self" '
-		$1 ~ /^fe80:/ && /lladdr/ {
+	ip -6 neigh show dev "$dev" 2>/dev/null | awk -v self="$self" -v dev="$dev" '
+		$1 ~ /^fe80:/ && $2 == "lladdr" {
 			if (index(self, $1) == 0)
-				print $1 "%" $3
+				print $1 "%" dev
 		}' | sort -u
 }

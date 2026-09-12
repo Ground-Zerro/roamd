@@ -32,12 +32,14 @@
 #define AUTOUPDATE_BUSY_RETRY	300000
 #define AUTOUPDATE_FAIL_RETRY	1800
 
+static void discover_done(struct mesh_task *task, int ret);
 static void acquire_done(struct mesh_task *task, int ret);
 static void sync_done(struct mesh_task *task, int ret);
 
 static bool sync_pending;
+static bool discover_restart;
 
-static struct mesh_task discover_job;
+static struct mesh_task discover_job = { .done = discover_done };
 static struct mesh_task acquire_job = { .done = acquire_done };
 static struct mesh_task poll_job;
 static struct mesh_task sync_job = { .done = sync_done };
@@ -47,13 +49,33 @@ static char acquire_task[32];
 static char acquire_addr[MESH_ADDR_MAX];
 static const char *acquire_kind = "";
 
-void mesh_ctrl_discover(bool rescan, struct blob_buf *b)
+static void discover_start(void)
+{
+	unlink(CANDIDATES);
+	mesh_task_start(&discover_job, MESH_DISCOVER, NULL, NULL);
+}
+
+static void discover_done(struct mesh_task *task, int ret)
+{
+	if (!discover_restart)
+		return;
+
+	discover_restart = false;
+	discover_start();
+}
+
+void mesh_ctrl_discover(bool rescan, bool stop, struct blob_buf *b)
 {
 	char *data;
 
-	if (rescan && !discover_job.busy) {
-		unlink(CANDIDATES);
-		mesh_task_start(&discover_job, MESH_DISCOVER, NULL, NULL);
+	if (stop) {
+		discover_restart = false;
+		mesh_task_stop(&discover_job);
+	} else if (rescan && discover_job.busy) {
+		discover_restart = true;
+		mesh_task_stop(&discover_job);
+	} else if (rescan) {
+		discover_start();
 	}
 
 	blobmsg_add_u8(b, "scanning", discover_job.busy);

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <syslog.h>
 
 #include "roamd.h"
@@ -32,6 +33,12 @@ static void ubus_connect_handler(struct ubus_context *ctx)
 
 int main(int argc, char **argv)
 {
+	if (argc == 3 && !strcmp(argv[1], "apk-index"))
+		return apk_index_print(argv[2]) ? 0 : 1;
+
+	if (argc == 3 && !strcmp(argv[1], "apk-block"))
+		return apk_block_print(argv[2]) ? 0 : 1;
+
 	openlog("roamd", LOG_PID, LOG_DAEMON);
 
 	roam_time_update();

@@ -1,3 +1,4 @@
+#include <signal.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -25,6 +26,8 @@ pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2)
 
 	if (pid == 0) {
 		int fd = open("/dev/null", O_WRONLY);
+
+		setpgid(0, 0);
 
 		if (fd >= 0) {
 			dup2(fd, STDOUT_FILENO);
@@ -67,6 +70,12 @@ bool mesh_task_start(struct mesh_task *task, const char *script,
 	task->busy = true;
 
 	return true;
+}
+
+void mesh_task_stop(struct mesh_task *task)
+{
+	if (task->busy && task->proc.pid > 0)
+		kill(-task->proc.pid, SIGTERM);
 }
 
 static void deps_done(struct mesh_task *task, int ret)

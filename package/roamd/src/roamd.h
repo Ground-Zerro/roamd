@@ -215,6 +215,9 @@ bool roam_policy_can_steer(const struct roam_sta *sta);
 
 void roam_ubus_object_init(void);
 
+bool apk_index_print(const char *path);
+bool apk_block_print(const char *path);
+
 #define roam_log(level, fmt, ...) do { \
 	if (config.log_level >= (level)) \
 		syslog(LOG_INFO, fmt, ##__VA_ARGS__); \

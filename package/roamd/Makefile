@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.0.1-r12
+PKG_VERSION:=1.0.1-r13
 PKG_RELEASE:=
 
 PKG_LICENSE:=GPL-3.0-only
@@ -17,7 +17,7 @@ define Package/roamd
   CATEGORY:=Network
   SUBMENU:=wireless
   TITLE:=Wi-Fi band steering and fast roaming daemon
-  DEPENDS:=+libubox +libubus +libuci +libblobmsg-json
+  DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +zlib
   URL:=https://github.com/Ground-Zerro/roamd
 endef
 

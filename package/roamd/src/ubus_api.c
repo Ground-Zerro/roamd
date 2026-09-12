@@ -291,6 +291,7 @@ enum {
 	MESH_ARG_NEIGHBORS,
 	MESH_ARG_RESET,
 	MESH_ARG_RESCAN,
+	MESH_ARG_STOP,
 	__MESH_ARG_MAX
 };
 
@@ -306,6 +307,7 @@ static const struct blobmsg_policy mesh_arg_policy[__MESH_ARG_MAX] = {
 	[MESH_ARG_NEIGHBORS] = { .name = "neighbors", .type = BLOBMSG_TYPE_ARRAY },
 	[MESH_ARG_RESET] = { .name = "reset", .type = BLOBMSG_TYPE_STRING },
 	[MESH_ARG_RESCAN] = { .name = "rescan", .type = BLOBMSG_TYPE_BOOL },
+	[MESH_ARG_STOP] = { .name = "stop", .type = BLOBMSG_TYPE_BOOL },
 };
 
 static int roamd_mesh_discover(struct ubus_context *ctx, struct ubus_object *obj,
@@ -320,7 +322,8 @@ static int roamd_mesh_discover(struct ubus_context *ctx, struct ubus_object *obj
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 
 	blob_buf_init(&b, 0);
-	mesh_ctrl_discover(tb[MESH_ARG_RESCAN] && blobmsg_get_bool(tb[MESH_ARG_RESCAN]), &b);
+	mesh_ctrl_discover(tb[MESH_ARG_RESCAN] && blobmsg_get_bool(tb[MESH_ARG_RESCAN]),
+			   tb[MESH_ARG_STOP] && blobmsg_get_bool(tb[MESH_ARG_STOP]), &b);
 	ubus_send_reply(ctx, req, b.head);
 
 	return 0;

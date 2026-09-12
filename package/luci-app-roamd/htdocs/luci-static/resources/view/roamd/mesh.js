@@ -46,6 +46,13 @@ var callMeshDiscover = rpc.declare({
 	expect: { }
 });
 
+var callMeshDiscoverStop = rpc.declare({
+	object: 'roamd',
+	method: 'mesh_discover',
+	params: [ 'stop' ],
+	expect: { }
+});
+
 var callMeshAcquire = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_acquire',
@@ -305,16 +312,26 @@ function acquireStepText(step) {
 
 function discoverDialog() {
 	var body = E('div', {}, [ E('p', { 'class': 'spinning' }, _('Scanning the local network…')) ]);
+	var open = true;
+
+	function close() {
+		open = false;
+		ui.hideModal();
+		callMeshDiscoverStop(true);
+	}
 
 	ui.showModal(_('Add a new node'), [
 		body,
 		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close'))
+			E('button', { 'class': 'btn', 'click': close }, _('Close'))
 		])
 	]);
 
 	var tick = function(rescan) {
 		callMeshDiscover(rescan).then(function(res) {
+			if (!open)
+				return;
+
 			res = res || {};
 			var list = res.candidates || [];
 

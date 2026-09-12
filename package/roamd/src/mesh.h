@@ -149,6 +149,7 @@ struct mesh_task {
 pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2);
 bool mesh_task_start(struct mesh_task *task, const char *script,
 		     const char *arg1, const char *arg2);
+void mesh_task_stop(struct mesh_task *task);
 void mesh_deps_start(void);
 void mesh_deps_blob(struct blob_buf *b);
 
@@ -168,7 +169,7 @@ bool mesh_client_set(const char *mac, const char *band, const char *alias, const
 void mesh_neighbors_set(struct blob_attr *arr);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
 
-void mesh_ctrl_discover(bool rescan, struct blob_buf *b);
+void mesh_ctrl_discover(bool rescan, bool stop, struct blob_buf *b);
 void mesh_ctrl_acquire(const char *addr, struct blob_buf *b);
 void mesh_ctrl_acquire_blob(struct blob_buf *b);
 bool mesh_ctrl_acquire_mac(uint8_t *out);

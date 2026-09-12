@@ -19,9 +19,10 @@ set(SOURCES
 	mesh_clients.c
 	mesh_log.c
 	ubus_api.c
+	apk.c
 )
 
 add_executable(roamd ${SOURCES})
-target_link_libraries(roamd ubox ubus uci blobmsg_json)
+target_link_libraries(roamd ubox ubus uci blobmsg_json z)
 
 install(TARGETS roamd RUNTIME DESTINATION sbin)

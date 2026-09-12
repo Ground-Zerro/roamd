@@ -55,6 +55,7 @@ probe() {
 }
 
 self="$(own_addrs | tr '\n' ' ')"
+dev=$(lan_device)
 
 for sub in $(lan_subnets); do
 	warm_subnet "$(subnet_base "$sub")"
@@ -63,7 +64,7 @@ done
 : > /var/run/roamd/cand-items.txt
 : > /var/run/roamd/cand-macs.txt
 
-ip neigh show | sort -u | while read -r addr _ _ kw mac rest; do
+[ -n "$dev" ] && ip neigh show dev "$dev" | sort -u | while read -r addr kw mac rest; do
 	[ "$kw" = "lladdr" ] || continue
 	case "$addr" in *:*) continue;; esac
 	case " $self " in *" $addr "*) continue;; esac
@@ -73,8 +74,8 @@ ip neigh show | sort -u | while read -r addr _ _ kw mac rest; do
 	printf '%s\n' "$mac" >> /var/run/roamd/cand-macs.txt
 done
 
-for scoped in $(ll_neighbours); do
-	mac=$(ip -6 neigh show | awk -v a="${scoped%%\%*}" '$1 == a { print $5; exit }')
+for scoped in $([ -n "$dev" ] && ll_neighbours "$dev"); do
+	mac=$(ip -6 neigh show dev "$dev" | awk -v a="${scoped%%\%*}" '$1 == a { print $3; exit }')
 	grep -qiF "$mac" /var/run/roamd/cand-macs.txt 2>/dev/null && continue
 	item=$(probe "$scoped" "$mac") || continue
 	printf '%s\n' "$item" >> /var/run/roamd/cand-items.txt
