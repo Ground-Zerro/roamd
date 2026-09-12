@@ -102,8 +102,7 @@ static uint32_t ssid_issues(struct uci_context *ctx, struct uci_package *pkg, co
 
 void roam_pair_evaluate(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct roam_bss *bss;
 
 	list_for_each_entry(bss, &roam_bss_list, list) {
@@ -111,14 +110,8 @@ void roam_pair_evaluate(void)
 		bss->pair_issues = roam_bss_matches(bss) ? 0 : PAIR_NOT_MANAGED;
 	}
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return;
-
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
 
 	list_for_each_entry(bss, &roam_bss_list, list) {
 		if (bss->pair_issues & PAIR_NOT_MANAGED)
@@ -129,11 +122,11 @@ void roam_pair_evaluate(void)
 			continue;
 		}
 
-		bss->pair_issues |= ssid_issues(ctx, pkg, bss->ssid);
+		bss->pair_issues |= ssid_issues(u.ctx, u.pkg, bss->ssid);
 
 		if (!bss->nr || !bss->pair_peer->nr)
 			bss->pair_issues |= PAIR_NO_NEIGHBOR;
 	}
 
-	uci_free_context(ctx);
+	uci_session_close(&u);
 }

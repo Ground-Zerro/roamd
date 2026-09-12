@@ -111,4 +111,5 @@ jobs:
       - name: Publish per-feed releases
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: ./repo.sh publish feeds ${{ needs.matrix.outputs.version }}

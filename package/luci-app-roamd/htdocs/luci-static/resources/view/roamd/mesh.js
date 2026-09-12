@@ -97,8 +97,14 @@ var callMeshSettings = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
 	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'backhaul_delta',
-		'backhaul_min_signal', 'auto_update', 'auto_update_every', 'auto_update_unit', 'pkg_url',
-		'controller_name' ],
+		'backhaul_min_signal', 'auto_update', 'auto_update_every', 'auto_update_unit', 'pkg_url' ],
+	expect: { }
+});
+
+var callMeshControllerName = rpc.declare({
+	object: 'roamd',
+	method: 'mesh_settings',
+	params: [ 'controller_name' ],
 	expect: { }
 });
 
@@ -700,8 +706,7 @@ function renameController(current) {
 		if (name === current)
 			return;
 
-		callMeshSettings(undefined, undefined, undefined, undefined, undefined, undefined,
-			undefined, undefined, name).then(refreshNodes);
+		callMeshControllerName(name).then(refreshNodes);
 	});
 }
 
@@ -910,22 +915,29 @@ function renderLog() {
 		bar, table
 	]);
 
+	function load() {
+		return callMeshLog().then(function(events) {
+			all = events || [];
+			refresh();
+		}, function() {});
+	}
+
 	Promise.all([
-		callMeshLog().catch(function() { return []; }),
 		common.hostHints(),
 		uci.load('roamd').catch(function() { return null; })
 	]).then(function(res) {
 		var ov = common.deviceOverrides();
 
 		logNames = {};
-		for (var mac in (res[1] || {}))
-			logNames[mac.toLowerCase()] = common.hostName(res[1], mac);
+		for (var mac in (res[0] || {}))
+			logNames[mac.toLowerCase()] = common.hostName(res[0], mac);
 		for (var m in ov)
 			if (ov[m].alias)
 				logNames[m] = ov[m].alias;
 
-		all = res[0] || [];
-		refresh();
+		return load();
+	}).then(function() {
+		poll.add(load, 5);
 	});
 
 	return container;

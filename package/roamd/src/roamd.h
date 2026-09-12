@@ -14,6 +14,7 @@
 #include <libubox/list.h>
 #include <libubox/uloop.h>
 #include <libubus.h>
+#include <uci.h>
 
 #ifndef ROAMD_VERSION
 #define ROAMD_VERSION		"1.0.0"
@@ -165,6 +166,24 @@ void roam_config_load(void);
 void roam_config_dump(struct blob_buf *b);
 
 bool roam_uci_bool(const char *value);
+
+struct uci_session {
+	struct uci_context *ctx;
+	struct uci_package *pkg;
+	const char *name;
+	bool dirty;
+};
+
+bool uci_session_open(struct uci_session *s, const char *package);
+struct uci_section *uci_session_find(struct uci_session *s, const char *type,
+				     const char *option, const char *value);
+struct uci_section *uci_session_add(struct uci_session *s, const char *type, const char *name);
+void uci_session_set(struct uci_session *s, const char *section,
+		     const char *option, const char *value);
+void uci_session_add_list(struct uci_session *s, const char *section,
+			  const char *option, const char *value);
+bool uci_session_delete(struct uci_session *s, const char *section, const char *option);
+void uci_session_close(struct uci_session *s);
 void roam_wireless_apply(void);
 
 extern const char *const roam_pair_issues[];

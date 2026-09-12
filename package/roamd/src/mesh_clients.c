@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -230,26 +231,19 @@ static void refresh_member(const char *id, uint32_t now)
 	}
 }
 
-static void dev_opt(struct uci_context *ctx, const char *sect,
-		    const char *opt, const char *val)
+static void dev_opt(struct uci_session *u, const char *sect, const char *opt, const char *val)
 {
-	struct uci_ptr ptr = {
-		.package = "roamd", .section = sect, .option = opt, .value = val,
-	};
-
 	if (val)
-		uci_set(ctx, &ptr);
-	else if (uci_lookup_ptr(ctx, &ptr, NULL, false) == UCI_OK && ptr.o)
-		uci_delete(ctx, &ptr);
+		uci_session_set(u, sect, opt, val);
+	else
+		uci_session_delete(u, sect, opt);
 }
 
-static void dev_nodes(struct uci_context *ctx, const char *sect, const char *csv)
+static void dev_nodes(struct uci_session *u, const char *sect, const char *csv)
 {
-	struct uci_ptr del = { .package = "roamd", .section = sect, .option = "node" };
 	char buf[256], *tok, *save;
 
-	if (uci_lookup_ptr(ctx, &del, NULL, false) == UCI_OK && del.o)
-		uci_delete(ctx, &del);
+	uci_session_delete(u, sect, "node");
 
 	if (!*csv)
 		return;
@@ -257,78 +251,50 @@ static void dev_nodes(struct uci_context *ctx, const char *sect, const char *csv
 	strncpy(buf, csv, sizeof(buf) - 1);
 	buf[sizeof(buf) - 1] = '\0';
 
-	for (tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
-		if (!*tok)
-			continue;
-		uci_add_list(ctx, &(struct uci_ptr){
-			.package = "roamd", .section = sect, .option = "node", .value = tok });
-	}
+	for (tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save))
+		if (*tok)
+			uci_session_add_list(u, sect, "node", tok);
 }
 
 bool mesh_client_set(const char *mac, const char *band, const char *alias, const char *nodes)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
-	struct uci_element *e;
-	struct uci_section *found = NULL;
-	const char *rband, *ralias;
-	struct uci_option *rnode;
+	struct uci_session u;
+	struct uci_section *found;
+	char key[MESH_MAC_MAX];
+	size_t i;
 
 	if (!mac || !*mac)
 		return false;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	for (i = 0; mac[i] && i < sizeof(key) - 1; i++)
+		key[i] = tolower((unsigned char)mac[i]);
+	key[i] = '\0';
+
+	if (!uci_session_open(&u, "roamd"))
 		return false;
 
-	if (uci_load(ctx, "roamd", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return false;
-	}
-
-	uci_foreach_element(&pkg->sections, e) {
-		struct uci_section *s = uci_to_section(e);
-		const char *m;
-
-		if (strcmp(s->type, "device"))
-			continue;
-		m = uci_lookup_option_string(ctx, s, "mac");
-		if (m && !strcasecmp(m, mac)) {
-			found = s;
-			break;
-		}
-	}
-
+	found = uci_session_find(&u, "device", "mac", key);
 	if (!found) {
-		uci_add_section(ctx, pkg, "device", &found);
+		found = uci_session_add(&u, "device", NULL);
 		if (!found) {
-			uci_free_context(ctx);
+			uci_session_close(&u);
 			return false;
 		}
-		dev_opt(ctx, found->e.name, "mac", mac);
+		uci_session_set(&u, found->e.name, "mac", key);
 	}
 
 	if (band)
-		dev_opt(ctx, found->e.name, "band",
-			strcmp(band, "both") ? band : NULL);
+		dev_opt(&u, found->e.name, "band", strcmp(band, "both") ? band : NULL);
 	if (alias)
-		dev_opt(ctx, found->e.name, "alias", *alias ? alias : NULL);
+		dev_opt(&u, found->e.name, "alias", *alias ? alias : NULL);
 	if (nodes)
-		dev_nodes(ctx, found->e.name, nodes);
+		dev_nodes(&u, found->e.name, nodes);
 
-	rband = uci_lookup_option_string(ctx, found, "band");
-	ralias = uci_lookup_option_string(ctx, found, "alias");
-	rnode = uci_lookup_option(ctx, found, "node");
+	if (!uci_lookup_option(u.ctx, found, "band") && !uci_lookup_option(u.ctx, found, "alias") &&
+	    !uci_lookup_option(u.ctx, found, "node"))
+		uci_session_delete(&u, found->e.name, NULL);
 
-	if (!rband && !ralias && !rnode) {
-		struct uci_ptr ptr = { .package = "roamd", .section = found->e.name };
-
-		if (uci_lookup_ptr(ctx, &ptr, NULL, false) == UCI_OK)
-			uci_delete(ctx, &ptr);
-	}
-
-	uci_commit(ctx, &pkg, false);
-	uci_free_context(ctx);
+	uci_session_close(&u);
 
 	roam_config_load();
 	mesh_ctrl_sync();

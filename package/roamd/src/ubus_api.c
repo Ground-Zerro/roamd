@@ -431,8 +431,7 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 		"auto_update_unit", "pkg_url", "controller_name"
 	};
 	struct blob_attr *tb[__SET_MAX];
-	struct uci_context *uci;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	size_t i;
 
 	if (mesh.role != MESH_CONTROLLER)
@@ -440,30 +439,16 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 
 	blobmsg_parse(settings_policy, __SET_MAX, tb, blob_data(msg), blob_len(msg));
 
-	uci = uci_alloc_context();
-	if (!uci)
+	if (!uci_session_open(&u, "roamd"))
 		return UBUS_STATUS_UNKNOWN_ERROR;
 
-	if (uci_load(uci, "roamd", &pkg) != UCI_OK) {
-		uci_free_context(uci);
-		return UBUS_STATUS_UNKNOWN_ERROR;
-	}
+	uci_session_add(&u, "mesh", "mesh");
 
-	mesh_uci_section(uci, pkg);
+	for (i = 0; i < __SET_MAX; i++)
+		if (tb[i])
+			uci_session_set(&u, "mesh", opts[i], blobmsg_get_string(tb[i]));
 
-	for (i = 0; i < __SET_MAX; i++) {
-		struct uci_ptr ptr = {
-			.package = "roamd", .section = "mesh", .option = opts[i],
-		};
-
-		if (!tb[i])
-			continue;
-		ptr.value = blobmsg_get_string(tb[i]);
-		uci_set(uci, &ptr);
-	}
-
-	uci_commit(uci, &pkg, false);
-	uci_free_context(uci);
+	uci_session_close(&u);
 
 	roam_config_load();
 	mesh_ctrl_backhaul_apply();

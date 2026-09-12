@@ -121,10 +121,37 @@ index_feed() {
 	fi
 }
 
+release_assets() {
+	id=$(gh api "repos/{owner}/{repo}/releases/tags/$1" --jq .id) || return 1
+	gh api --paginate "repos/{owner}/{repo}/releases/$id/assets?per_page=100" --jq '.[] | "\(.id) \(.name)"'
+}
+
+release_prune() {
+	tag="$1"
+	keep="$2"
+	shift 2
+
+	release_assets "$tag" | while read -r id name; do
+		[ -e "$keep/$name" ] && continue
+
+		owned=
+		for prefix in "$@"; do
+			case "$name" in
+			"$prefix"roamd*|"$prefix"luci-*|"$prefix"Packages*|"$prefix"packages.adb) owned=1; break ;;
+			esac
+		done
+		[ -n "$owned" ] || continue
+
+		gh api -X DELETE "repos/{owner}/{repo}/releases/assets/$id" </dev/null >/dev/null || exit 1
+		echo "  $tag: удалён $name"
+	done
+}
+
 publish_feeds() {
 	src="$1"
 	version="$2"
 	all="$src/all"
+	prefixes=
 
 	command -v gh >/dev/null 2>&1 || { echo "нужен gh" >&2; return 1; }
 
@@ -139,21 +166,27 @@ publish_feeds() {
 			gh release create "$tag" --title "$tag" --notes "Репозиторий пакетов roamd: $tag" --prerelease
 
 		gh release upload "$tag" "$dir"/* --clobber || return 1
+		release_prune "$tag" "$dir" "" || return 1
 		echo "  $tag"
 
+		prefixes="$prefixes ${tag#feed-}-"
 		for pkg in "$dir"/*.ipk "$dir"/*.apk; do
 			[ -f "$pkg" ] || continue
-			cp "$pkg" "$all/$(basename "$dir" | sed 's/^feed-//')-$(basename "$pkg")"
+			cp "$pkg" "$all/${tag#feed-}-$(basename "$pkg")"
 		done
 	done
 
-	if [ -n "$version" ]; then
-		tag="v$version"
-		gh release view "$tag" >/dev/null 2>&1 ||
-			gh release create "$tag" --title "roamd $version" --notes "Пакеты roamd $version для веток 23.05, 24.10 и 25.12."
-		gh release upload "$tag" "$all"/* --clobber || return 1
-		echo "  $tag ($(ls "$all" | wc -l) файлов)"
+	[ -n "$version" ] || return 0
+
+	tag="v$version"
+	if gh release view "$tag" >/dev/null 2>&1; then
+		release_prune "$tag" "$all" $prefixes || return 1
+	else
+		gh release create "$tag" --title "roamd $version" --notes "Пакеты roamd $version для веток 23.05, 24.10 и 25.12."
 	fi
+
+	gh release upload "$tag" "$all"/* --clobber || return 1
+	echo "  $tag ($(ls "$all" | wc -l) файлов)"
 }
 
 stop_serving() {

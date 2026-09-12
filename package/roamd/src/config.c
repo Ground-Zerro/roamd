@@ -304,36 +304,145 @@ static void config_sanitize(void)
 		config.steer_retries = 1;
 }
 
+bool uci_session_open(struct uci_session *s, const char *package)
+{
+	s->pkg = NULL;
+	s->name = package;
+	s->dirty = false;
+
+	s->ctx = uci_alloc_context();
+	if (!s->ctx)
+		return false;
+
+	if (uci_load(s->ctx, package, &s->pkg) != UCI_OK) {
+		uci_free_context(s->ctx);
+		s->ctx = NULL;
+		return false;
+	}
+
+	return true;
+}
+
+struct uci_section *uci_session_find(struct uci_session *s, const char *type,
+				     const char *option, const char *value)
+{
+	struct uci_element *e;
+
+	uci_foreach_element(&s->pkg->sections, e) {
+		struct uci_section *sec = uci_to_section(e);
+		const char *v;
+
+		if (strcmp(sec->type, type))
+			continue;
+
+		if (!option)
+			return sec;
+
+		v = uci_lookup_option_string(s->ctx, sec, option);
+		if (v && !strcmp(v, value))
+			return sec;
+	}
+
+	return NULL;
+}
+
+struct uci_section *uci_session_add(struct uci_session *s, const char *type, const char *name)
+{
+	struct uci_section *sec = NULL;
+
+	if (!name) {
+		if (uci_add_section(s->ctx, s->pkg, type, &sec) == UCI_OK && sec)
+			s->dirty = true;
+		return sec;
+	}
+
+	sec = uci_lookup_section(s->ctx, s->pkg, name);
+	if (sec)
+		return sec;
+
+	if (uci_set(s->ctx, &(struct uci_ptr){
+		.package = s->name, .section = name, .value = type }) != UCI_OK)
+		return NULL;
+
+	s->dirty = true;
+
+	return uci_lookup_section(s->ctx, s->pkg, name);
+}
+
+void uci_session_set(struct uci_session *s, const char *section,
+		     const char *option, const char *value)
+{
+	struct uci_ptr ptr = { .package = s->name, .section = section, .option = option };
+
+	if (uci_lookup_ptr(s->ctx, &ptr, NULL, false) == UCI_OK && ptr.o &&
+	    ptr.o->type == UCI_TYPE_STRING && !strcmp(ptr.o->v.string, value))
+		return;
+
+	if (uci_set(s->ctx, &(struct uci_ptr){
+		.package = s->name, .section = section, .option = option, .value = value }) == UCI_OK)
+		s->dirty = true;
+}
+
+void uci_session_add_list(struct uci_session *s, const char *section,
+			  const char *option, const char *value)
+{
+	if (uci_add_list(s->ctx, &(struct uci_ptr){
+		.package = s->name, .section = section, .option = option, .value = value }) == UCI_OK)
+		s->dirty = true;
+}
+
+bool uci_session_delete(struct uci_session *s, const char *section, const char *option)
+{
+	struct uci_ptr ptr = { .package = s->name, .section = section, .option = option };
+
+	if (uci_lookup_ptr(s->ctx, &ptr, NULL, false) != UCI_OK || (option ? !ptr.o : !ptr.s))
+		return false;
+
+	if (uci_delete(s->ctx, &ptr) != UCI_OK)
+		return false;
+
+	s->dirty = true;
+
+	return true;
+}
+
+void uci_session_close(struct uci_session *s)
+{
+	if (!s->ctx)
+		return;
+
+	if (s->dirty)
+		uci_commit(s->ctx, &s->pkg, false);
+
+	uci_free_context(s->ctx);
+	s->ctx = NULL;
+}
+
 void roam_config_load(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_element *e;
 
 	roam_config_init();
 	mesh_config_init();
-
-	ctx = uci_alloc_context();
-	if (!ctx)
-		return;
-
 	devices_clear();
 
-	if (uci_load(ctx, "roamd", &pkg) == UCI_OK) {
-		uci_foreach_element(&pkg->sections, e) {
+	if (uci_session_open(&u, "roamd")) {
+		uci_foreach_element(&u.pkg->sections, e) {
 			struct uci_section *s = uci_to_section(e);
 
 			if (!strcmp(s->type, "device"))
-				device_load(ctx, s);
+				device_load(u.ctx, s);
 			else if (!strcmp(s->type, "mesh"))
-				mesh_config_apply(ctx, s);
+				mesh_config_apply(u.ctx, s);
 			else if (!strcmp(s->type, "member"))
-				mesh_member_load(ctx, s);
+				mesh_member_load(u.ctx, s);
 			else
-				section_load(ctx, s);
+				section_load(u.ctx, s);
 		}
+
+		uci_session_close(&u);
 	}
 
-	uci_free_context(ctx);
 	config_sanitize();
 }

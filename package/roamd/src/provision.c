@@ -32,28 +32,17 @@ static bool encryption_is_eap(const char *enc)
 	return enc && !strncmp(enc, "wpa", 3);
 }
 
-static bool option_set_list(struct uci_context *ctx, struct uci_section *s,
+static void option_set_list(struct uci_session *u, struct uci_section *s,
 			    const char *name, const char *value)
 {
-	struct uci_ptr cur = {
-		.package = s->package->e.name, .section = s->e.name, .option = name,
-		.p = s->package, .s = s,
-	};
-	struct uci_ptr add = cur;
-	struct uci_option *o = uci_lookup_option(ctx, s, name);
+	struct uci_option *o = uci_lookup_option(u->ctx, s, name);
 
-	if (o && o->type == UCI_TYPE_LIST) {
-		struct uci_element *e = list_to_element(o->v.list.next);
+	if (o && o->type == UCI_TYPE_LIST && o->v.list.next == o->v.list.prev &&
+	    !strcmp(list_to_element(o->v.list.next)->name, value))
+		return;
 
-		if (o->v.list.next == o->v.list.prev && !strcmp(e->name, value))
-			return false;
-	}
-
-	uci_delete(ctx, &cur);
-	add.value = value;
-	uci_add_list(ctx, &add);
-
-	return true;
+	uci_session_delete(u, s->e.name, name);
+	uci_session_add_list(u, s->e.name, name, value);
 }
 
 static void mdid_derive(const char *ssid, char *out)
@@ -72,44 +61,24 @@ static void mdid_derive(const char *ssid, char *out)
 	snprintf(out, ROAMD_MDID_LEN + 1, "%04x", hash);
 }
 
-static bool option_set(struct uci_context *ctx, struct uci_section *s,
-		       const char *name, const char *value)
+static void iface_provision(struct uci_session *u, struct uci_section *s)
 {
-	struct uci_ptr ptr = {
-		.package = s->package->e.name,
-		.section = s->e.name,
-		.option = name,
-		.value = value
-	};
-	const char *cur = uci_lookup_option_string(ctx, s, name);
-
-	if (cur && !strcmp(cur, value))
-		return false;
-
-	ptr.p = s->package;
-	ptr.s = s;
-
-	return uci_set(ctx, &ptr) == UCI_OK;
-}
-
-static bool iface_provision(struct uci_context *ctx, struct uci_section *s)
-{
-	const char *mode = uci_lookup_option_string(ctx, s, "mode");
-	const char *ssid = uci_lookup_option_string(ctx, s, "ssid");
-	const char *disabled = uci_lookup_option_string(ctx, s, "disabled");
-	const char *enc = uci_lookup_option_string(ctx, s, "encryption");
+	const char *mode = uci_lookup_option_string(u->ctx, s, "mode");
+	const char *ssid = uci_lookup_option_string(u->ctx, s, "ssid");
+	const char *disabled = uci_lookup_option_string(u->ctx, s, "disabled");
+	const char *enc = uci_lookup_option_string(u->ctx, s, "encryption");
 	char mdid[ROAMD_MDID_LEN + 1];
-	bool ft, changed = false;
+	bool ft;
 	size_t i;
 
 	if (!mode || strcmp(mode, "ap") || !ssid)
-		return false;
+		return;
 
 	if (roam_uci_bool(disabled))
-		return false;
+		return;
 
 	if (config.ssid[0] && strcmp(config.ssid, ssid))
-		return false;
+		return;
 
 	bool eap;
 
@@ -137,8 +106,7 @@ static bool iface_provision(struct uci_context *ctx, struct uci_section *s)
 		if (!ft && !strcmp(settings[i].name, "mobility_domain"))
 			continue;
 
-		if (option_set(ctx, s, settings[i].name, settings[i].value))
-			changed = true;
+		uci_session_set(u, s->e.name, settings[i].name, settings[i].value);
 	}
 
 	if (eap) {
@@ -147,17 +115,11 @@ static bool iface_provision(struct uci_context *ctx, struct uci_section *s)
 		snprintf(r0kh, sizeof(r0kh), "ff:ff:ff:ff:ff:ff,*,%s", mesh.ft_key);
 		snprintf(r1kh, sizeof(r1kh), "00:00:00:00:00:00,00:00:00:00:00:00,%s", mesh.ft_key);
 
-		if (option_set(ctx, s, "nas_identifier", mesh_self_node_id()))
-			changed = true;
-		if (option_set(ctx, s, "pmk_r1_push", "0"))
-			changed = true;
-		if (option_set_list(ctx, s, "r0kh", r0kh))
-			changed = true;
-		if (option_set_list(ctx, s, "r1kh", r1kh))
-			changed = true;
+		uci_session_set(u, s->e.name, "nas_identifier", mesh_self_node_id());
+		uci_session_set(u, s->e.name, "pmk_r1_push", "0");
+		option_set_list(u, s, "r0kh", r0kh);
+		option_set_list(u, s, "r1kh", r1kh);
 	}
-
-	return changed;
 }
 
 static void network_reload(void)
@@ -172,40 +134,29 @@ static void network_reload(void)
 
 void roam_wireless_apply(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_element *e;
-	bool changed = false;
+	bool changed;
 
 	if (!config.apply_wireless)
 		return;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return;
 
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
-
-	uci_foreach_element(&pkg->sections, e) {
+	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
 
-		if (strcmp(s->type, "wifi-iface"))
-			continue;
-
-		if (iface_provision(ctx, s))
-			changed = true;
+		if (!strcmp(s->type, "wifi-iface"))
+			iface_provision(&u, s);
 	}
 
-	if (changed) {
-		uci_commit(ctx, &pkg, false);
-		roam_log(ROAM_L_INFO, "roamd: wireless configuration updated, reloading network");
-	}
+	changed = u.dirty;
+	uci_session_close(&u);
 
-	uci_free_context(ctx);
+	if (!changed)
+		return;
 
-	if (changed)
-		network_reload();
+	roam_log(ROAM_L_INFO, "roamd: wireless configuration updated, reloading network");
+	network_reload();
 }

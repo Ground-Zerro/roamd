@@ -179,23 +179,6 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b);
 void mesh_ctrl_poll_start(void);
 void mesh_ctrl_autoupdate_arm(void);
 void mesh_ctrl_sync(void);
-void mesh_uci_set(struct uci_context *ctx, const char *pkg, const char *sect,
-		  const char *opt, const char *val);
-
-struct uci_session {
-	struct uci_context *ctx;
-	struct uci_package *pkg;
-	const char *name;
-	bool dirty;
-};
-
-bool uci_session_open(struct uci_session *s, const char *package);
-struct uci_section *uci_session_find(struct uci_session *s, const char *type,
-				     const char *option, const char *value);
-void uci_session_set(struct uci_session *s, const char *section,
-		     const char *option, const char *value);
-void uci_session_close(struct uci_session *s);
-void mesh_uci_section(struct uci_context *ctx, struct uci_package *pkg);
 void mesh_ctrl_ensure_id(void);
 void mesh_ctrl_backhaul_apply(void);
 void mesh_ctrl_bridge_stp(void);

@@ -281,18 +281,6 @@ static void gen_hex(char *out, size_t bytes)
 		snprintf(out + i * 2, 3, "%02x", buf[i]);
 }
 
-void mesh_uci_section(struct uci_context *ctx, struct uci_package *pkg)
-{
-	struct uci_ptr ptr = {
-		.package = "roamd", .section = "mesh", .value = "mesh",
-	};
-
-	if (uci_lookup_section(ctx, pkg, "mesh"))
-		return;
-
-	uci_set(ctx, &ptr);
-}
-
 void mesh_ctrl_ensure_id(void)
 {
 	struct uci_session u;
@@ -305,7 +293,7 @@ void mesh_ctrl_ensure_id(void)
 	if (!uci_session_open(&u, "roamd"))
 		return;
 
-	mesh_uci_section(u.ctx, u.pkg);
+	uci_session_add(&u, "mesh", "mesh");
 	uci_session_set(&u, "mesh", "controller_id", mesh.controller_id);
 	uci_session_close(&u);
 }
@@ -357,7 +345,7 @@ void mesh_ctrl_backhaul_apply(void)
 	if (!uci_session_open(&u, "roamd"))
 		return;
 
-	mesh_uci_section(u.ctx, u.pkg);
+	uci_session_add(&u, "mesh", "mesh");
 
 	if (!mesh.ft_key[0]) {
 		gen_hex(mesh.ft_key, 16);
@@ -380,13 +368,7 @@ void mesh_ctrl_backhaul_apply(void)
 	if (!uci_session_open(&u, "wireless"))
 		return;
 
-	if (uci_lookup_section(u.ctx, u.pkg, "mesh_backhaul")) {
-		struct uci_ptr ptr = { .package = "wireless", .section = "mesh_backhaul" };
-
-		if (uci_lookup_ptr(u.ctx, &ptr, NULL, false) == UCI_OK &&
-		    uci_delete(u.ctx, &ptr) == UCI_OK)
-			u.dirty = true;
-	}
+	uci_session_delete(&u, "mesh_backhaul", NULL);
 
 	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
@@ -397,21 +379,9 @@ void mesh_ctrl_backhaul_apply(void)
 
 		snprintf(name, sizeof(name), "%s%s", MESH_BH_PREFIX, s->e.name);
 
-		if (!uci_lookup_section(u.ctx, u.pkg, name)) {
-			struct uci_section *ns = NULL;
-
-			if (!want)
-				continue;
-
-			uci_add_section(u.ctx, u.pkg, "wifi-iface", &ns);
-			if (!ns)
-				continue;
-
-			uci_rename(u.ctx, &(struct uci_ptr){
-				.package = "wireless", .section = ns->e.name,
-				.value = name });
-			u.dirty = true;
-		}
+		if (!uci_lookup_section(u.ctx, u.pkg, name) &&
+		    (!want || !uci_session_add(&u, "wifi-iface", name)))
+			continue;
 
 		if (!want) {
 			uci_session_set(&u, name, "disabled", "1");
@@ -592,29 +562,22 @@ bool mesh_member_remove(const char *id)
 {
 	struct uci_session u;
 	struct uci_section *sec;
-	struct uci_ptr ptr = { .package = "roamd" };
 	bool removed = false;
 
 	if (!uci_session_open(&u, "roamd"))
 		return false;
 
 	sec = uci_session_find(&u, "member", "id", id);
-	if (sec) {
-		ptr.section = sec->e.name;
+	if (sec && uci_session_delete(&u, sec->e.name, NULL)) {
+		char path[128];
 
-		if (uci_lookup_ptr(u.ctx, &ptr, NULL, false) == UCI_OK &&
-		    uci_delete(u.ctx, &ptr) == UCI_OK) {
-			char path[128];
-
-			u.dirty = true;
-			snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
-			unlink(path);
-			snprintf(path, sizeof(path), "/etc/roamd/members/%s.crt", id);
-			unlink(path);
-			snprintf(path, sizeof(path), "/etc/roamd/tokens/%s", id);
-			unlink(path);
-			removed = true;
-		}
+		snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
+		unlink(path);
+		snprintf(path, sizeof(path), "/etc/roamd/members/%s.crt", id);
+		unlink(path);
+		snprintf(path, sizeof(path), "/etc/roamd/tokens/%s", id);
+		unlink(path);
+		removed = true;
 	}
 
 	uci_session_close(&u);

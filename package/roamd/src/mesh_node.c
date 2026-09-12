@@ -128,54 +128,37 @@ static const char *bh_radio(struct uci_context *ctx, struct uci_package *pkg, in
 
 static bool bh_sta_apply(int band, bool enabled)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	const char *radio;
+	bool changed;
 	uint32_t id;
 
 	if (!mesh.backhaul_ssid[0] || !mesh.backhaul_key[0])
 		return false;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return false;
 
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return false;
-	}
-
-	radio = bh_radio(ctx, pkg, band);
-	if (!radio) {
-		uci_free_context(ctx);
+	radio = bh_radio(u.ctx, u.pkg, band);
+	if (!radio || !uci_session_add(&u, "wifi-iface", MESH_BH_STA)) {
+		uci_session_close(&u);
 		return false;
 	}
 
-	if (!uci_lookup_section(ctx, pkg, MESH_BH_STA)) {
-		struct uci_section *ns = NULL;
+	uci_session_set(&u, MESH_BH_STA, "device", radio);
+	uci_session_set(&u, MESH_BH_STA, "mode", "sta");
+	uci_session_set(&u, MESH_BH_STA, "network", "lan");
+	uci_session_set(&u, MESH_BH_STA, "encryption", "psk2");
+	uci_session_set(&u, MESH_BH_STA, "wds", "1");
+	uci_session_set(&u, MESH_BH_STA, "ssid", mesh.backhaul_ssid);
+	uci_session_set(&u, MESH_BH_STA, "key", mesh.backhaul_key);
+	uci_session_set(&u, MESH_BH_STA, "disabled", enabled ? "0" : "1");
 
-		uci_add_section(ctx, pkg, "wifi-iface", &ns);
-		if (!ns) {
-			uci_free_context(ctx);
-			return false;
-		}
+	changed = u.dirty;
+	uci_session_close(&u);
 
-		uci_rename(ctx, &(struct uci_ptr){
-			.package = "wireless", .section = ns->e.name,
-			.value = MESH_BH_STA });
-	}
-
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "device", radio);
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "mode", "sta");
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "network", "lan");
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "encryption", "psk2");
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "wds", "1");
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "ssid", mesh.backhaul_ssid);
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "key", mesh.backhaul_key);
-	mesh_uci_set(ctx, "wireless", MESH_BH_STA, "disabled", enabled ? "0" : "1");
-
-	uci_commit(ctx, &pkg, false);
-	uci_free_context(ctx);
+	if (!changed)
+		return true;
 
 	if (!ubus_lookup_id(ubus_ctx, "network", &id))
 		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
@@ -391,34 +374,24 @@ static void watch_cb(struct uloop_timeout *t)
 
 static void bh_state_load(void)
 {
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_section *sta;
-	const char *disabled, *device;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return;
 
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
+	sta = uci_lookup_section(u.ctx, u.pkg, MESH_BH_STA);
 
-	sta = uci_lookup_section(ctx, pkg, MESH_BH_STA);
-	disabled = sta ? uci_lookup_option_string(ctx, sta, "disabled") : NULL;
+	if (sta && !roam_uci_bool(uci_lookup_option_string(u.ctx, sta, "disabled"))) {
+		const char *device = uci_lookup_option_string(u.ctx, sta, "device");
+		const char *radio = bh_radio(u.ctx, u.pkg, 1);
 
-	if (sta && !roam_uci_bool(disabled)) {
 		bh_up = true;
 		bh_since = roam_now;
-
-		device = uci_lookup_option_string(ctx, sta, "device");
-		if (device && bh_radio(ctx, pkg, 1) &&
-		    !strcmp(device, bh_radio(ctx, pkg, 1)))
-			bh_band = 1;
+		bh_band = device && radio && !strcmp(device, radio);
 	}
 
-	uci_free_context(ctx);
+	uci_session_close(&u);
 }
 
 uint32_t mesh_node_contact_age(void)
@@ -443,14 +416,7 @@ void mesh_node_watch_start(void)
 	uloop_timeout_set(&watch_timer, MESH_WATCH_INTERVAL);
 }
 
-static void uci_set_opt(struct uci_context *ctx, const char *section,
-			const char *option, const char *value)
-{
-	mesh_uci_set(ctx, "roamd", section, option, value);
-}
-
-static void apply_table(struct uci_context *ctx, const char *section,
-			struct blob_attr *table)
+static void apply_table(struct uci_session *u, const char *section, struct blob_attr *table)
 {
 	struct blob_attr *cur;
 	int rem;
@@ -461,7 +427,7 @@ static void apply_table(struct uci_context *ctx, const char *section,
 	blobmsg_for_each_attr(cur, table, rem) {
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING)
 			continue;
-		uci_set_opt(ctx, section, blobmsg_name(cur), blobmsg_get_string(cur));
+		uci_session_set(u, section, blobmsg_name(cur), blobmsg_get_string(cur));
 	}
 }
 
@@ -610,10 +576,9 @@ static bool apply_wifi(struct blob_attr *wifi)
 {
 	static const char *const names[] = { "ssid", "encryption", "key" };
 	struct blob_attr *tb[__WIFI_MAX];
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_element *e;
-	bool changed = false;
+	bool changed;
 
 	if (!wifi)
 		return false;
@@ -622,25 +587,17 @@ static bool apply_wifi(struct blob_attr *wifi)
 	if (!tb[WIFI_SSID])
 		return false;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return false;
 
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return false;
-	}
-
-	uci_foreach_element(&pkg->sections, e) {
+	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
-		const char *mode = uci_lookup_option_string(ctx, s, "mode");
+		const char *mode = uci_lookup_option_string(u.ctx, s, "mode");
 		size_t i;
 
 		if (!strcmp(s->type, "wifi-device")) {
-			if (roam_uci_bool(uci_lookup_option_string(ctx, s, "disabled"))) {
-				mesh_uci_set(ctx, "wireless", s->e.name, "disabled", "0");
-				changed = true;
-			}
+			if (roam_uci_bool(uci_lookup_option_string(u.ctx, s, "disabled")))
+				uci_session_set(&u, s->e.name, "disabled", "0");
 			continue;
 		}
 
@@ -650,32 +607,17 @@ static bool apply_wifi(struct blob_attr *wifi)
 		if (!strncmp(s->e.name, MESH_BH_PREFIX, strlen(MESH_BH_PREFIX)))
 			continue;
 
-		if (roam_uci_bool(uci_lookup_option_string(ctx, s, "disabled"))) {
-			mesh_uci_set(ctx, "wireless", s->e.name, "disabled", "0");
-			changed = true;
-		}
+		if (roam_uci_bool(uci_lookup_option_string(u.ctx, s, "disabled")))
+			uci_session_set(&u, s->e.name, "disabled", "0");
 
-		for (i = 0; i < __WIFI_MAX; i++) {
-			const char *cur = uci_lookup_option_string(ctx, s, names[i]);
-			struct uci_ptr ptr = {
-				.package = "wireless", .section = s->e.name,
-				.option = names[i],
-			};
-
-			if (!tb[i])
-				continue;
-			ptr.value = blobmsg_get_string(tb[i]);
-			if (cur && !strcmp(cur, ptr.value))
-				continue;
-			uci_set(ctx, &ptr);
-			changed = true;
-		}
+		for (i = 0; i < __WIFI_MAX; i++)
+			if (tb[i])
+				uci_session_set(&u, s->e.name, names[i], blobmsg_get_string(tb[i]));
 	}
 
-	if (changed)
-		uci_commit(ctx, &pkg, false);
+	changed = u.dirty;
+	uci_session_close(&u);
 
-	uci_free_context(ctx);
 	return changed;
 }
 
@@ -687,20 +629,17 @@ static const struct blobmsg_policy dev_policy[__DEV_MAX] = {
 	[DEV_NODES] = { .name = "nodes", .type = BLOBMSG_TYPE_ARRAY },
 };
 
-static void apply_devices(struct uci_context *ctx, struct uci_package *pkg,
-			  struct blob_attr *devices)
+static void apply_devices(struct uci_session *u, struct blob_attr *devices)
 {
 	struct uci_element *e, *tmp;
 	struct blob_attr *cur;
 	int rem;
 
-	uci_foreach_element_safe(&pkg->sections, tmp, e) {
+	uci_foreach_element_safe(&u->pkg->sections, tmp, e) {
 		struct uci_section *s = uci_to_section(e);
-		struct uci_ptr ptr = { .package = "roamd", .section = s->e.name };
 
-		if (!strcmp(s->type, "device") &&
-		    uci_lookup_ptr(ctx, &ptr, NULL, false) == UCI_OK)
-			uci_delete(ctx, &ptr);
+		if (!strcmp(s->type, "device"))
+			uci_session_delete(u, s->e.name, NULL);
 	}
 
 	if (!devices)
@@ -708,7 +647,7 @@ static void apply_devices(struct uci_context *ctx, struct uci_package *pkg,
 
 	blobmsg_for_each_attr(cur, devices, rem) {
 		struct blob_attr *tb[__DEV_MAX];
-		struct uci_section *ns = NULL;
+		struct uci_section *ns;
 
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE)
 			continue;
@@ -718,18 +657,14 @@ static void apply_devices(struct uci_context *ctx, struct uci_package *pkg,
 		if (!tb[DEV_MAC])
 			continue;
 
-		uci_add_section(ctx, pkg, "device", &ns);
+		ns = uci_session_add(u, "device", NULL);
 		if (!ns)
 			continue;
 
-		uci_set(ctx, &(struct uci_ptr){
-			.package = "roamd", .section = ns->e.name,
-			.option = "mac", .value = blobmsg_get_string(tb[DEV_MAC]) });
+		uci_session_set(u, ns->e.name, "mac", blobmsg_get_string(tb[DEV_MAC]));
 
 		if (tb[DEV_BAND])
-			uci_set(ctx, &(struct uci_ptr){
-				.package = "roamd", .section = ns->e.name,
-				.option = "band", .value = blobmsg_get_string(tb[DEV_BAND]) });
+			uci_session_set(u, ns->e.name, "band", blobmsg_get_string(tb[DEV_BAND]));
 
 		if (tb[DEV_NODES]) {
 			struct blob_attr *n;
@@ -737,9 +672,7 @@ static void apply_devices(struct uci_context *ctx, struct uci_package *pkg,
 
 			blobmsg_for_each_attr(n, tb[DEV_NODES], nrem)
 				if (blobmsg_type(n) == BLOBMSG_TYPE_STRING)
-					uci_add_list(ctx, &(struct uci_ptr){
-						.package = "roamd", .section = ns->e.name,
-						.option = "node", .value = blobmsg_get_string(n) });
+					uci_session_add_list(u, ns->e.name, "node", blobmsg_get_string(n));
 		}
 	}
 }
@@ -747,8 +680,7 @@ static void apply_devices(struct uci_context *ctx, struct uci_package *pkg,
 bool mesh_node_apply(struct blob_attr *msg)
 {
 	struct blob_attr *tb[__APPLY_MAX];
-	struct uci_context *ctx;
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	const char *from;
 
 	blobmsg_parse(apply_policy, __APPLY_MAX, tb, blob_data(msg), blob_len(msg));
@@ -760,22 +692,15 @@ bool mesh_node_apply(struct blob_attr *msg)
 	if (mesh.controller_id[0] && strcmp(from, mesh.controller_id))
 		return false;
 
-	ctx = uci_alloc_context();
-	if (!ctx)
+	if (!uci_session_open(&u, "roamd"))
 		return false;
 
-	if (uci_load(ctx, "roamd", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return false;
-	}
+	apply_table(&u, "global", tb[APPLY_GLOBAL]);
+	apply_table(&u, "policy", tb[APPLY_POLICY]);
+	apply_table(&u, "mesh", tb[APPLY_BACKHAUL]);
+	apply_devices(&u, tb[APPLY_DEVICES]);
 
-	apply_table(ctx, "global", tb[APPLY_GLOBAL]);
-	apply_table(ctx, "policy", tb[APPLY_POLICY]);
-	apply_table(ctx, "mesh", tb[APPLY_BACKHAUL]);
-	apply_devices(ctx, pkg, tb[APPLY_DEVICES]);
-
-	uci_commit(ctx, &pkg, false);
-	uci_free_context(ctx);
+	uci_session_close(&u);
 
 	if (apply_wifi(tb[APPLY_WIFI])) {
 		uint32_t id;
@@ -802,31 +727,25 @@ static void node_profile(struct blob_buf *b)
 		"ssid", "encryption", "mobility_domain",
 		"ieee80211r", "bss_transition", "ieee80211k"
 	};
-	struct uci_context *ctx = uci_alloc_context();
-	struct uci_package *pkg = NULL;
+	struct uci_session u;
 	struct uci_element *e;
 	void *t;
 
-	if (!ctx)
+	if (!uci_session_open(&u, "wireless"))
 		return;
-
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK) {
-		uci_free_context(ctx);
-		return;
-	}
 
 	t = blobmsg_open_table(b, "profile");
 
-	uci_foreach_element(&pkg->sections, e) {
+	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
-		const char *mode = uci_lookup_option_string(ctx, s, "mode");
+		const char *mode = uci_lookup_option_string(u.ctx, s, "mode");
 		size_t i;
 
 		if (!mode || strcmp(mode, "ap"))
 			continue;
 
 		for (i = 0; i < ARRAY_SIZE(fields); i++) {
-			const char *v = uci_lookup_option_string(ctx, s, fields[i]);
+			const char *v = uci_lookup_option_string(u.ctx, s, fields[i]);
 
 			if (v)
 				blobmsg_add_string(b, fields[i], v);
@@ -838,7 +757,7 @@ static void node_profile(struct blob_buf *b)
 		blobmsg_add_string(b, "backhaul_ssid", mesh.backhaul_ssid);
 
 	blobmsg_close_table(b, t);
-	uci_free_context(ctx);
+	uci_session_close(&u);
 }
 
 #define STA_IFACES \
