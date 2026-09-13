@@ -56,6 +56,10 @@ wget -O - https://raw.githubusercontent.com/Ground-Zerro/roamd/main/install.sh |
 роуминг заработает сразу. Если нет — **Сеть → Роуминг Wi-Fi**, кнопка
 **Создать сеть с роумингом…**.
 
+## Документация
+
+Подробная документация — [docs/README.md](docs/README.md).
+
 ## Лицензия
 
 GPL-3.0-only, см. [LICENSE](LICENSE).
@@ -120,6 +124,10 @@ Nothing else has to be done: the service is added to autostart and the 802.11k/v
 are written on their own. If a network with the same name is already configured on both
 bands, roaming starts working right away. If not — **Network → Wi-Fi Roaming**, the
 **Create a roaming network…** button.
+
+## Documentation
+
+Full documentation (in Russian) — [docs/README.md](docs/README.md).
 
 ## License
 
