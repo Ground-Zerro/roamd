@@ -1637,8 +1637,8 @@ function renderSettings(state) {
 		]),
 		number('backhaul_delta', _('5 GHz advantage for the node link'),
 			_('dB. A node bringing up its wireless link picks 5 GHz if its signal is weaker than 2.4 GHz by no more than this value.'), 0, 40),
-		number('backhaul_min_signal', _('Minimum 5 GHz signal for the node link'),
-			_('dBm. A weaker 5 GHz signal is not used for the node link while 2.4 GHz is available.'), -95, -40),
+		number('backhaul_min_signal', _('Minimum signal for the node link'),
+			_('dBm. A weaker link is used only when nothing stronger is heard: 5 GHz gives way to 2.4 GHz, and a parent closer to the controller gives way to a stronger one.'), -95, -40),
 		text('backhaul_ssid', _('Backhaul network name')),
 		text('backhaul_key', _('Backhaul key'), null, true),
 

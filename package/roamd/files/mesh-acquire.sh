@@ -7,24 +7,21 @@ TASK="$2"
 
 task_open "$TASK"
 
+member_name() {
+	local label="$1" id="$2" sect
 
-
-controller_addr_for() {
-	local target="$1" net3="${1%.*}"
-
-	if addr_is_v6 "$target"; then
-		own_addrs | head -1
-		return 0
-	fi
-
-	ip -4 -o addr show scope global | while read -r _ _ _ cidr _; do
-		local ip="${cidr%/*}"
-		[ "${ip%.*}" = "$net3" ] && { echo "$ip"; break; }
+	for sect in $(member_sections); do
+		[ "$(uci -q get "roamd.$sect.id")" != "$id" ] || continue
+		[ "$(uci -q get "roamd.$sect.name")" = "$label" ] || continue
+		echo "$label $id"
+		return
 	done
+
+	echo "$label"
 }
 
 register_member() {
-	local id="$1" mac="$2" addr="$3" hostname="$4" sect found=""
+	local id="$1" mac="$2" addr="$3" hostname="$4" label="$5" sect found=""
 
 	for sect in $(member_sections); do
 		[ "$(uci -q get roamd.$sect.mac)" = "$mac" ] && found="$sect"
@@ -35,7 +32,7 @@ register_member() {
 	uci set roamd.$found.mac="$mac"
 	uci set roamd.$found.addr="$addr"
 	uci set roamd.$found.hostname="$hostname"
-	[ -n "$(uci -q get roamd.$found.name)" ] || uci set roamd.$found.name="$hostname"
+	[ -n "$(uci -q get roamd.$found.name)" ] || uci set roamd.$found.name="$(member_name "$label" "$id")"
 	uci set roamd.$found.managed='1'
 	uci commit roamd
 }
@@ -48,6 +45,7 @@ board=$(node_ssh "$ADDR" 'ubus call system board' 2>/dev/null)
 [ -n "$board" ] || fail probe "SSH root without a password is not available"
 json_load "$board" 2>/dev/null || fail probe "cannot read device info"
 json_get_var hostname hostname
+json_get_var model model
 json_select release 2>/dev/null && json_get_var version version
 json_select .. 2>/dev/null
 report probe ok "${hostname:-OpenWrt} ${version}"
@@ -67,6 +65,10 @@ mac=$(echo "$mac" | tr -d '\r\n ')
 branch="${version%.*}"
 [ -n "$branch" ] || fail compat "unknown OpenWrt version"
 
+cidr=$(lan_subnets | head -1)
+[ -n "$cidr" ] || fail compat "the controller LAN has no private IPv4 subnet"
+caddr="${cidr%/*}"
+
 ensure_curl || fail install "curl cannot be installed — no control channel to the node"
 
 report install progress "installing roamd and interface for $branch"
@@ -81,7 +83,6 @@ esac
 
 cid=$(uci -q get roamd.mesh.controller_id)
 cname=$(uci -q get system.@system[0].hostname); cname="${cname:-$(uname -n)}"
-caddr=$(controller_addr_for "$ADDR")
 member_id=$(echo "$mac" | tr -d ':' | tail -c 7)
 
 report enroll progress "assigning node role"
@@ -107,6 +108,10 @@ node_ssh "$ADDR" "
 " || fail enroll "cannot assign the node role"
 
 report network progress "switching the node to the controller subnet"
+
+node_ip=$(node_lease_reserve "$cidr" "$mac" "$member_id") ||
+	fail network "no free address for the node in the controller subnet $cidr"
+netmask=$(cidr_netmask "$cidr")
 
 if addr_is_v6 "$ADDR"; then
 	uplink_probe="ip -6 -o addr show scope link 2>/dev/null | awk -v a='${ADDR%%\%*}/' 'index(\$4, a) == 1 { print \$2; exit }'"
@@ -141,10 +146,12 @@ node_ssh_long "$ADDR" "
 	[ \"\$skip\" = 1 ] || uci add_list network.\$br.ports=\"\$uplink\"
 	uci set network.\$br.macaddr='$mac'
 
-	uci set network.lan.proto='dhcp'
-	uci -q delete network.lan.ipaddr
-	uci -q delete network.lan.netmask
-	uci -q delete network.lan.gateway
+	uci set network.lan.proto='static'
+	uci set network.lan.ipaddr='$node_ip'
+	uci set network.lan.netmask='$netmask'
+	uci set network.lan.gateway='$caddr'
+	uci -q delete network.lan.dns
+	uci add_list network.lan.dns='$caddr'
 	uci -q delete network.lan.ip6assign
 	uci -q delete network.wan
 	uci -q delete network.wan6
@@ -179,16 +186,17 @@ node_ssh_long "$ADDR" "
 	/etc/init.d/dnsmasq disable
 	/etc/init.d/odhcpd disable
 
-	ubus call service add \"{\\\"name\\\":\\\"roamd-netapply\\\",\\\"instances\\\":{\\\"main\\\":{\\\"command\\\":[\\\"/bin/sh\\\",\\\"/usr/libexec/roamd/net-apply.sh\\\",\\\"\$brname\\\"]}}}\"
+	ubus call service add \"{\\\"name\\\":\\\"roamd-netapply\\\",\\\"instances\\\":{\\\"main\\\":{\\\"command\\\":[\\\"/bin/sh\\\",\\\"/usr/libexec/roamd/net-apply.sh\\\",\\\"\$brname\\\",\\\"$caddr\\\"]}}}\"
 
 	echo \"\$(date '+%H:%M:%S') network: uplink=\$uplink bridge=\$br(\$brname) mac=$mac, restart scheduled\" >> /tmp/roamd-diag.log
 " || fail network "cannot switch the node to the controller subnet"
 
 sleep 20
-newaddr=$(node_wait_by_mac "$mac" 180)
-[ -n "$newaddr" ] || fail network "the node did not reappear in the controller subnet"
-ADDR="$newaddr"
-caddr=$(controller_addr_for "$ADDR")
+node_wait_at "$node_ip" "$mac" 180 || {
+	node_lease_drop "$member_id"
+	fail network "the node did not appear at $node_ip in the controller subnet"
+}
+ADDR="$node_ip"
 
 node_ssh_long "$ADDR" "
 	date -u -s '$(date -u '+%Y-%m-%d %H:%M:%S')' >/dev/null 2>&1
@@ -206,14 +214,14 @@ state=$(node_ssh "$ADDR" '
 ' 2>/dev/null)
 
 case "$state" in
-	"dhcp-server=1 lan=dhcp nat=0") report network ok "$ADDR" ;;
+	"dhcp-server=1 lan=static nat=0") report network ok "$ADDR" ;;
 	*) report network error "the node is still a router ($state) — single subnet not applied"; exit 1 ;;
 esac
 
 report profile progress "checking 802.11v support on the node"
 wpad_out=$(node_ssh_long "$ADDR" '/usr/libexec/roamd/deps-ensure.sh' 2>&1)
 wpad_rc=$?
-wpad_out=$(echo "$wpad_out" | grep '^wpad:' | tail -1)
+wpad_out=$(echo "$wpad_out" | grep '^deps:' | tail -1)
 [ -n "$wpad_out" ] && report profile progress "$wpad_out"
 [ "$wpad_rc" = "0" ] ||
 	fail profile "the node has no 802.11v-capable wpad and it cannot be installed"
@@ -299,7 +307,9 @@ if [ -n "$pubkey" ]; then
 	fi
 fi
 
-register_member "$member_id" "$mac" "$ADDR" "${hostname:-OpenWrt}"
+label="${hostname:-OpenWrt}"
+[ "$label" = "OpenWrt" ] && [ -n "$model" ] && label="$model"
+register_member "$member_id" "$mac" "$ADDR" "${hostname:-OpenWrt}" "$label"
 ubus -t 3 call roamd reload >/dev/null 2>&1
 
 report profile progress "waiting for the node to broadcast the network"

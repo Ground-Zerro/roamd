@@ -6,7 +6,12 @@
 mode="${1:-monitor}"
 mkdir -p "$MEMBERS_DIR"
 
+PROFILE_SUM="/var/run/roamd/profile.sum"
+
 profile=$(/usr/libexec/roamd/mesh-profile.sh)
+profile_sum=$(printf '%s' "$profile" | md5sum | cut -d' ' -f1)
+[ "$profile_sum" = "$(cat "$PROFILE_SUM" 2>/dev/null)" ] || mode=force
+printf '%s' "$profile_sum" > "$PROFILE_SUM"
 
 ap_section_find
 c_ssid=$(ap_field ssid)
@@ -240,6 +245,7 @@ if [ "$nb" -gt 0 ]; then
 		id=$(uci -q get "roamd.$sect.id")
 		addr=$(uci -q get "roamd.$sect.addr")
 		[ -n "$id" ] && [ -n "$addr" ] || continue
+		[ "$(jsonfilter -e '@.online' < "$MEMBERS_DIR/$id.json" 2>/dev/null)" = true ] || continue
 		member_call "$id" "$addr" mesh_neighbors "$payload"
 	done
 fi

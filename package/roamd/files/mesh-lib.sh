@@ -637,25 +637,74 @@ warm_subnet() {
 	wait
 }
 
-node_addr_by_mac() {
-	local mac="$1" sub
-
-	for sub in $(lan_subnets); do
-		warm_subnet "$(subnet_base "$sub")"
-	done
-
-	ip neigh show dev "$(lan_device)" | awk -v m="$mac" '$2 == "lladdr" && tolower($3) == tolower(m) { print $1; exit }'
+cidr_netmask() {
+	awk -v p="${1#*/}" 'BEGIN {
+		for (i = 0; i < 4; i++) {
+			b = p >= 8 ? 255 : (p > 0 ? 256 - 2 ^ (8 - p) : 0)
+			p -= 8
+			printf "%s%d", i ? "." : "", b
+		}
+	}'
 }
 
-node_wait_by_mac() {
-	local mac="$1" limit="${2:-120}" waited=0 addr
+node_lease_reserve() {
+	local cidr="$1" mac="$2" id="$3" ip taken
+
+	ip=$(uci -q get "dhcp.roamd_$id.ip")
+
+	if [ -z "$ip" ]; then
+		warm_subnet "$(subnet_base "$cidr")"
+		taken=$({
+			cut -d' ' -f3 /tmp/dhcp.leases 2>/dev/null
+			uci -q show dhcp | sed -n "s/^dhcp\.[^.]*\.ip='\(.*\)'\$/\1/p"
+			ip -4 neigh show dev "$(lan_device)" 2>/dev/null | awk '$2 == "lladdr" { print $1 }'
+			own_addrs
+		} | tr '\n' ' ')
+
+		ip=$(awk -v cidr="$cidr" -v start="$(uci -q get dhcp.lan.start)" \
+			-v limit="$(uci -q get dhcp.lan.limit)" -v taken=" $taken " '
+			function num(a,   o) { split(a, o, "."); return ((o[1] * 256 + o[2]) * 256 + o[3]) * 256 + o[4] }
+			BEGIN {
+				split(cidr, c, "/")
+				size = 2 ^ (32 - c[2])
+				base = num(c[1]) - num(c[1]) % size
+				start = start ? start : 100
+				limit = limit ? limit : 150
+				for (i = start; i < start + limit && i < size - 1; i++) {
+					n = base + i
+					a = int(n / 16777216) "." int(n / 65536) % 256 "." int(n / 256) % 256 "." n % 256
+					if (!index(taken, " " a " ")) {
+						print a
+						exit
+					}
+				}
+			}')
+	fi
+
+	[ -n "$ip" ] || return 1
+
+	uci set "dhcp.roamd_$id=host"
+	uci set "dhcp.roamd_$id.mac=$mac"
+	uci set "dhcp.roamd_$id.ip=$ip"
+	uci commit dhcp
+	/etc/init.d/dnsmasq reload >/dev/null 2>&1
+
+	echo "$ip"
+}
+
+node_lease_drop() {
+	uci -q delete "dhcp.roamd_$1" || return 0
+	uci commit dhcp
+	/etc/init.d/dnsmasq reload >/dev/null 2>&1
+}
+
+node_wait_at() {
+	local addr="$1" mac="$2" limit="$3" waited=0
 
 	while [ "$waited" -lt "$limit" ]; do
-		addr=$(node_addr_by_mac "$mac")
-		if [ -n "$addr" ] && node_ssh "$addr" true >/dev/null 2>&1; then
-			echo "$addr"
-			return 0
-		fi
+		ping -c 1 -W 1 "$addr" >/dev/null 2>&1
+		ip neigh show "$addr" 2>/dev/null | grep -qi "lladdr $mac" &&
+			node_ssh "$addr" true >/dev/null 2>&1 && return 0
 		sleep 5
 		waited=$((waited + 5))
 	done

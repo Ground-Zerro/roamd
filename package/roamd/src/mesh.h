@@ -61,6 +61,9 @@ struct mesh_event {
 
 #define MESH_BH_DELTA_DEFAULT		20
 #define MESH_BH_MIN_SIGNAL_DEFAULT	-78
+#define MESH_BH_PARENT_MAX		24
+#define MESH_BH_PARENTS_LEN		1024
+#define MESH_FT_KEY_HEX			64
 
 struct mesh_config {
 	bool enabled;
@@ -69,8 +72,8 @@ struct mesh_config {
 	bool backhaul_enabled;
 	char backhaul_ssid[MESH_SSID_MAX];
 	char backhaul_key[MESH_KEY_MAX];
-	char backhaul_bssids[128];
-	char ft_key[33];
+	char backhaul_parents[MESH_BH_PARENTS_LEN];
+	char ft_key[MESH_FT_KEY_HEX + 1];
 	bool wifi_shutdown;
 	int backhaul_delta;
 	int backhaul_min_signal;
@@ -99,6 +102,7 @@ void mesh_start(void);
 const char *mesh_role_name(enum mesh_role role);
 const char *mesh_self_node_id(void);
 void mesh_aps_dump(struct blob_buf *b, const char *name);
+void mesh_backhaul_bss_set(bool up);
 
 #define MESH_ASSOC_MAX	128
 
@@ -136,6 +140,10 @@ bool mesh_bridge_port_of(const uint8_t *mac, struct mesh_uplink *out);
 void mesh_wired_collect(struct mesh_assoc_idx *idx, const uint8_t *parent);
 const char *mesh_bridge_member_behind(const uint8_t *mac);
 bool mesh_parent_mac(uint8_t *out);
+void mesh_bridge_wifi_cost(void);
+bool mesh_bridge_root_is_self(const char *bridge);
+bool mesh_bridge_carrier(const char *ifname);
+bool mesh_bridge_sta_up(void);
 
 #define MESH_DEPS_SCRIPT	"/usr/libexec/roamd/deps-ensure.sh"
 #define MESH_DEPS_STATE		"/tmp/roamd/deps"

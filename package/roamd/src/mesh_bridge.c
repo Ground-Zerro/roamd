@@ -11,6 +11,7 @@
 
 #define BR_SYS		"/sys/class/net"
 #define FDB_ENTRY_MAX	512
+#define STP_WIFI_COST	1000
 
 struct fdb_entry {
 	uint8_t mac[6];
@@ -45,23 +46,31 @@ static bool sys_flag(const char *ifname, const char *node)
 	return !access(path, F_OK);
 }
 
-static long sys_num(const char *ifname, const char *node)
+static bool sys_line(const char *ifname, const char *node, char *buf, size_t len)
 {
-	char path[320], buf[32];
+	char path[320];
 	FILE *f;
-	long v = -1;
+	bool got;
 
 	snprintf(path, sizeof(path), BR_SYS "/%s/%s", ifname, node);
 	f = fopen(path, "r");
 	if (!f)
-		return -1;
+		return false;
 
-	if (fgets(buf, sizeof(buf), f))
-		v = strtol(buf, NULL, 0);
-
+	got = fgets(buf, len, f) != NULL;
 	fclose(f);
 
-	return v;
+	if (got)
+		buf[strcspn(buf, "\r\n")] = '\0';
+
+	return got;
+}
+
+static long sys_num(const char *ifname, const char *node)
+{
+	char buf[32];
+
+	return sys_line(ifname, node, buf, sizeof(buf)) ? strtol(buf, NULL, 0) : -1;
 }
 
 static bool br_ports_load(struct br_view *v)
@@ -318,4 +327,66 @@ void mesh_wired_collect(struct mesh_assoc_idx *idx, const uint8_t *parent)
 	}
 
 	closedir(d);
+}
+
+void mesh_bridge_wifi_cost(void)
+{
+	DIR *d = opendir(BR_SYS);
+	struct dirent *de;
+
+	if (!d)
+		return;
+
+	while ((de = readdir(d))) {
+		char path[320];
+		FILE *f;
+
+		if (de->d_name[0] == '.' || !sys_flag(de->d_name, "phy80211") ||
+		    !sys_flag(de->d_name, "brport") ||
+		    sys_num(de->d_name, "brport/path_cost") == STP_WIFI_COST)
+			continue;
+
+		snprintf(path, sizeof(path), BR_SYS "/%s/brport/path_cost", de->d_name);
+		f = fopen(path, "w");
+		if (!f)
+			continue;
+
+		fprintf(f, "%d", STP_WIFI_COST);
+		fclose(f);
+	}
+
+	closedir(d);
+}
+
+bool mesh_bridge_root_is_self(const char *bridge)
+{
+	char root[32], self[32];
+
+	return sys_line(bridge, "bridge/root_id", root, sizeof(root)) &&
+	       sys_line(bridge, "bridge/bridge_id", self, sizeof(self)) &&
+	       !strcmp(root, self);
+}
+
+bool mesh_bridge_carrier(const char *ifname)
+{
+	return sys_num(ifname, "carrier") == 1;
+}
+
+bool mesh_bridge_sta_up(void)
+{
+	DIR *d = opendir(BR_SYS);
+	struct dirent *de;
+	char state[16];
+	bool up = false;
+
+	if (!d)
+		return false;
+
+	while (!up && (de = readdir(d)))
+		up = strstr(de->d_name, "-sta") && sys_flag(de->d_name, "phy80211") &&
+		     sys_line(de->d_name, "operstate", state, sizeof(state)) && !strcmp(state, "up");
+
+	closedir(d);
+
+	return up;
 }

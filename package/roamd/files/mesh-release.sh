@@ -49,6 +49,7 @@ while [ "$waited" -lt 90 ]; do
 	waited=$((waited + 5))
 	node_ssh "$ADDR" 'exit 0' >/dev/null 2>&1 || {
 		report reset ok "the node is resetting to factory settings"
+		node_lease_drop "$ID"
 		drop_member
 		exit 0
 	}

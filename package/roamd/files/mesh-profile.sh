@@ -4,6 +4,71 @@
 
 g() { uci -q get "roamd.$1"; }
 
+backhaul_parents() {
+	local ssid="$1" sect id file conn via
+
+	{
+		iwinfo 2>/dev/null | awk -v want="\"$ssid\"" '
+			$2 == "ESSID:" { seen = $3 == want; next }
+			seen && $1 == "Access" && $2 == "Point:" { bssid = tolower($3) }
+			seen && $1 == "Mode:" && $4 ~ /^[0-9]+$/ { print "B", bssid, "controller", ($4 > 14 ? "5" : "2.4"); seen = 0 }'
+
+		for sect in $(member_sections); do
+			id=$(uci -q get "roamd.$sect.id")
+			file="$MEMBERS_DIR/$id.json"
+			[ -n "$id" ] && [ "$(jsonfilter -e '@.online' < "$file" 2>/dev/null)" = true ] || continue
+
+			conn=$(jsonfilter -e '@.connection' < "$file" 2>/dev/null)
+			via=$(jsonfilter -e '@.via' < "$file" 2>/dev/null)
+			echo "M $id ${conn:-wired} ${via:-controller}"
+			jsonfilter -e "@.aps[@.ssid='$ssid']" < "$file" 2>/dev/null |
+				sed -n "s/.*\"bssid\": \"\([^\"]*\)\".*\"band\": \"\([^\"]*\)\".*/B \1 $id \2/p"
+		done
+	} | awk '
+		function resolve(id,   o) {
+			if (id in depth)
+				return depth[id]
+			if ((id in busy) || !(id in conn))
+				return -1
+			busy[id] = 1
+
+			if (conn[id] != "wifi") {
+				depth[id] = 0
+				chain[id] = id
+				return 0
+			}
+
+			o = owner[via[id]]
+			if (o == "controller") {
+				depth[id] = 1
+				chain[id] = id
+				return 1
+			}
+			if (o == "" || resolve(o) < 0)
+				return -1
+
+			depth[id] = depth[o] + 1
+			chain[id] = chain[o] "-" id
+			return depth[id]
+		}
+		$1 == "B" { owner[$2] = $3; band[$2] = $4; order[++n] = $2; next }
+		$1 == "M" { conn[$2] = $3; via[$2] = tolower($4) }
+		END {
+			for (i = 1; i <= n; i++) {
+				b = order[i]
+				o = owner[b]
+				if (o == "controller")
+					entry = b "/0//" band[b]
+				else if (resolve(o) >= 0)
+					entry = b "/" depth[o] "/" chain[o] "/" band[b]
+				else
+					continue
+				out = out (out == "" ? "" : " ") entry
+			}
+			print out
+		}'
+}
+
 GLOBAL_OPTS="ssid mobility_domain band_steering prefer_band fast_transition ft_over_ds
 	neighbor_reports bss_transition"
 POLICY_OPTS="rssi_good rssi_low rssi_diff kick_rssi cross_band_delta hold_time age_time
@@ -77,11 +142,8 @@ for o in backhaul_enabled backhaul_ssid backhaul_key ft_key wifi_shutdown backha
 done
 bh_ssid=$(g mesh.backhaul_ssid)
 if [ -n "$bh_ssid" ]; then
-	bssids=$(iwinfo 2>/dev/null | awk -v want="\"$bh_ssid\"" '
-		$2 == "ESSID:" && $3 == want { seen = 1; next }
-		seen && $1 == "Access" && $2 == "Point:" { print $3; seen = 0 }' |
-		tr '\n' ' ' | sed 's/ *$//')
-	[ -n "$bssids" ] && json_add_string backhaul_bssids "$bssids"
+	parents=$(backhaul_parents "$bh_ssid")
+	[ -n "$parents" ] && json_add_string backhaul_parents "$parents"
 fi
 json_close_object
 

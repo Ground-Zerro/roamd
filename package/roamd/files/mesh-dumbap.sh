@@ -2,6 +2,7 @@
 
 [ "$(uci -q get roamd.mesh.role)" = "node" ] || exit 0
 
+RESOLV_AUTO="/tmp/resolv.conf.d/resolv.conf.auto"
 caddr=$(uci -q get roamd.mesh.controller_addr)
 changed=""
 fixed=""
@@ -24,6 +25,11 @@ if [ -n "$caddr" ] && [ "$(uci -q get dhcp.@dnsmasq[0].server)" != "$caddr" ]; t
 fi
 
 [ -n "$changed" ] && uci commit dhcp
+
+if [ "$(readlink /tmp/resolv.conf)" != "$RESOLV_AUTO" ]; then
+	ln -sf "$RESOLV_AUTO" /tmp/resolv.conf
+	fixed="$fixed resolv.conf"
+fi
 
 for svc in dnsmasq odhcpd; do
 	[ -x "/etc/init.d/$svc" ] || continue

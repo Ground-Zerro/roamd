@@ -175,7 +175,7 @@ static const struct mesh_field fields[] = {
 	MFIELD("backhaul_enabled", MESH_BOOL, backhaul_enabled),
 	MFIELD("backhaul_ssid", MESH_STR, backhaul_ssid),
 	MFIELD("backhaul_key", MESH_STR, backhaul_key),
-	MFIELD("backhaul_bssids", MESH_STR, backhaul_bssids),
+	MFIELD("backhaul_parents", MESH_STR, backhaul_parents),
 	MFIELD("ft_key", MESH_STR, ft_key),
 	MFIELD("wifi_shutdown", MESH_BOOL, wifi_shutdown),
 	MFIELD("backhaul_delta", MESH_INT, backhaul_delta),
@@ -258,6 +258,52 @@ void mesh_aps_dump(struct blob_buf *b, const char *name)
 	}
 
 	blobmsg_close_array(b, arr);
+}
+
+void mesh_backhaul_bss_set(bool up)
+{
+	struct uci_session u;
+	struct uci_element *e;
+	bool changed;
+	uint32_t id;
+
+	if (!uci_session_open(&u, "wireless"))
+		return;
+
+	uci_foreach_element(&u.pkg->sections, e) {
+		struct uci_section *s = uci_to_section(e);
+		char name[MESH_NAME_MAX];
+
+		if (strcmp(s->type, "wifi-device"))
+			continue;
+
+		snprintf(name, sizeof(name), "%s%s", MESH_BH_PREFIX, s->e.name);
+
+		if (!uci_lookup_section(u.ctx, u.pkg, name) &&
+		    (!up || !uci_session_add(&u, "wifi-iface", name)))
+			continue;
+
+		if (!up) {
+			uci_session_set(&u, name, "disabled", "1");
+			continue;
+		}
+
+		uci_session_set(&u, name, "device", s->e.name);
+		uci_session_set(&u, name, "mode", "ap");
+		uci_session_set(&u, name, "network", "lan");
+		uci_session_set(&u, name, "hidden", "1");
+		uci_session_set(&u, name, "wds", "1");
+		uci_session_set(&u, name, "encryption", "psk2");
+		uci_session_set(&u, name, "ssid", mesh.backhaul_ssid);
+		uci_session_set(&u, name, "key", mesh.backhaul_key);
+		uci_session_set(&u, name, "disabled", "0");
+	}
+
+	changed = u.dirty;
+	uci_session_close(&u);
+
+	if (changed && !ubus_lookup_id(ubus_ctx, "network", &id))
+		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
 }
 
 struct mesh_neighbor {

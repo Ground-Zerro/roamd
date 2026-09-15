@@ -657,11 +657,11 @@ msgstr "Преимущество 5 ГГц для звена узла"
 msgid "dB. A node bringing up its wireless link picks 5 GHz if its signal is weaker than 2.4 GHz by no more than this value."
 msgstr "дБ. Поднимая звено по воздуху, узел выбирает 5 ГГц, если его сигнал слабее 2,4 ГГц не больше чем на это значение."
 
-msgid "Minimum 5 GHz signal for the node link"
-msgstr "Минимальный сигнал 5 ГГц для звена узла"
+msgid "Minimum signal for the node link"
+msgstr "Минимальный сигнал для звена узла"
 
-msgid "dBm. A weaker 5 GHz signal is not used for the node link while 2.4 GHz is available."
-msgstr "дБм. Более слабый сигнал 5 ГГц не используется для звена узла, пока доступен 2,4 ГГц."
+msgid "dBm. A weaker link is used only when nothing stronger is heard: 5 GHz gives way to 2.4 GHz, and a parent closer to the controller gives way to a stronger one."
+msgstr "дБм. Более слабое звено используется, только если сильнее ничего не слышно: 5 ГГц уступает 2,4 ГГц, а родитель ближе к контроллеру — родителю с более сильным сигналом."
 
 msgid "not broadcasting"
 msgstr "не вещается"

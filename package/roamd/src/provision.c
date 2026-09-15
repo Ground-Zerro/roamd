@@ -27,9 +27,9 @@ static bool encryption_supports_ft(const char *enc)
 	return false;
 }
 
-static bool encryption_is_eap(const char *enc)
+static bool encryption_is_psk(const char *enc)
 {
-	return enc && !strncmp(enc, "wpa", 3);
+	return enc && !strncmp(enc, "psk", 3);
 }
 
 static void option_set_list(struct uci_session *u, struct uci_section *s,
@@ -80,10 +80,11 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 	if (config.ssid[0] && strcmp(config.ssid, ssid))
 		return;
 
-	bool eap;
+	bool psk, rrb;
 
 	ft = config.fast_transition && encryption_supports_ft(enc);
-	eap = ft && encryption_is_eap(enc) && mesh.ft_key[0];
+	psk = ft && encryption_is_psk(enc);
+	rrb = ft && !psk && mesh.ft_key[0];
 
 	if (config.mobility_domain[0])
 		snprintf(mdid, sizeof(mdid), "%s", config.mobility_domain);
@@ -98,7 +99,7 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 		{ "wnm_sleep_mode", config.bss_transition ? "1" : "0" },
 		{ "ieee80211r", ft ? "1" : "0" },
 		{ "ft_over_ds", ft && config.ft_over_ds ? "1" : "0" },
-		{ "ft_psk_generate_local", (ft && !eap) ? "1" : "0" },
+		{ "ft_psk_generate_local", psk ? "1" : "0" },
 		{ "mobility_domain", mdid }
 	};
 
@@ -109,13 +110,13 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 		uci_session_set(u, s->e.name, settings[i].name, settings[i].value);
 	}
 
-	if (eap) {
-		char r0kh[80], r1kh[96];
+	if (rrb) {
+		char r0kh[MESH_FT_KEY_HEX + 24], r1kh[MESH_FT_KEY_HEX + 40];
 
 		snprintf(r0kh, sizeof(r0kh), "ff:ff:ff:ff:ff:ff,*,%s", mesh.ft_key);
 		snprintf(r1kh, sizeof(r1kh), "00:00:00:00:00:00,00:00:00:00:00:00,%s", mesh.ft_key);
 
-		uci_session_set(u, s->e.name, "nas_identifier", mesh_self_node_id());
+		uci_session_set(u, s->e.name, "nasid", mesh_self_node_id());
 		uci_session_set(u, s->e.name, "pmk_r1_push", "0");
 		option_set_list(u, s, "r0kh", r0kh);
 		option_set_list(u, s, "r1kh", r1kh);

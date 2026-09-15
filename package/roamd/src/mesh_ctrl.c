@@ -23,6 +23,8 @@
 #define MESH_AUTOUPDATE	"/usr/libexec/roamd/mesh-autoupdate.sh"
 #define MESH_RELEASE	"/usr/libexec/roamd/mesh-release.sh"
 #define MESH_SELFCHECK	"/usr/libexec/roamd/mesh-selfcheck.sh"
+#define MESH_RC_COMMON		"/etc/rc.common"
+#define MESH_NETWORK_INIT	"/etc/init.d/network"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
 #define SELFCHECK	"/var/run/roamd/selfcheck.json"
 #define ACQUIRE_DIR	"/var/run/roamd/acquire"
@@ -33,6 +35,7 @@
 #define AUTOUPDATE_STEP		3600
 #define AUTOUPDATE_BUSY_RETRY	300000
 #define AUTOUPDATE_FAIL_RETRY	1800
+#define MESH_STP_ROOT_PRIORITY	"4096"
 
 struct mesh_job {
 	struct mesh_task task;
@@ -53,6 +56,7 @@ static struct mesh_job jobs[] = {
 };
 static struct mesh_task acquire_job = { .done = acquire_done };
 static struct mesh_task poll_job;
+static struct mesh_task network_job;
 static struct mesh_task sync_job = { .done = sync_done };
 static struct uloop_timeout poll_timer;
 static struct uloop_timeout autoupdate_timer;
@@ -336,7 +340,7 @@ void mesh_ctrl_bridge_stp(void)
 {
 	struct uci_session u;
 	struct uci_element *e;
-	uint32_t id;
+	bool changed;
 
 	if (mesh.role != MESH_CONTROLLER || list_empty(&mesh_members))
 		return;
@@ -347,31 +351,28 @@ void mesh_ctrl_bridge_stp(void)
 	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
 		const char *type = uci_lookup_option_string(u.ctx, s, "type");
-		const char *stp = uci_lookup_option_string(u.ctx, s, "stp");
 
 		if (strcmp(s->type, "device") || !type || strcmp(type, "bridge"))
 			continue;
-		if (stp && !strcmp(stp, "1"))
-			continue;
 
 		uci_session_set(&u, s->e.name, "stp", "1");
+		uci_session_set(&u, s->e.name, "priority", MESH_STP_ROOT_PRIORITY);
 	}
 
-	if (u.dirty && !ubus_lookup_id(ubus_ctx, "network", &id)) {
-		uci_session_close(&u);
-		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
-		return;
-	}
-
+	changed = u.dirty;
 	uci_session_close(&u);
+
+	if (!changed)
+		return;
+
+	roam_log(ROAM_L_INFO, "mesh: bridge settings changed, restarting the network");
+	mesh_task_start(&network_job, MESH_RC_COMMON, MESH_NETWORK_INIT, "restart");
 }
 
 void mesh_ctrl_backhaul_apply(void)
 {
 	bool want = mesh.backhaul_enabled && !list_empty(&mesh_members);
 	struct uci_session u;
-	struct uci_element *e;
-	uint32_t id;
 
 	if (mesh.role != MESH_CONTROLLER)
 		return;
@@ -381,8 +382,8 @@ void mesh_ctrl_backhaul_apply(void)
 
 	uci_session_add(&u, "mesh", "mesh");
 
-	if (!mesh.ft_key[0]) {
-		gen_hex(mesh.ft_key, 16);
+	if (strlen(mesh.ft_key) != MESH_FT_KEY_HEX) {
+		gen_hex(mesh.ft_key, MESH_FT_KEY_HEX / 2);
 		uci_session_set(&u, "mesh", "ft_key", mesh.ft_key);
 	}
 
@@ -399,47 +400,7 @@ void mesh_ctrl_backhaul_apply(void)
 
 	uci_session_close(&u);
 
-	if (!uci_session_open(&u, "wireless"))
-		return;
-
-	uci_session_delete(&u, "mesh_backhaul", NULL);
-
-	uci_foreach_element(&u.pkg->sections, e) {
-		struct uci_section *s = uci_to_section(e);
-		char name[MESH_NAME_MAX];
-
-		if (strcmp(s->type, "wifi-device"))
-			continue;
-
-		snprintf(name, sizeof(name), "%s%s", MESH_BH_PREFIX, s->e.name);
-
-		if (!uci_lookup_section(u.ctx, u.pkg, name) &&
-		    (!want || !uci_session_add(&u, "wifi-iface", name)))
-			continue;
-
-		if (!want) {
-			uci_session_set(&u, name, "disabled", "1");
-			continue;
-		}
-
-		uci_session_set(&u, name, "device", s->e.name);
-		uci_session_set(&u, name, "mode", "ap");
-		uci_session_set(&u, name, "network", "lan");
-		uci_session_set(&u, name, "hidden", "1");
-		uci_session_set(&u, name, "wds", "1");
-		uci_session_set(&u, name, "encryption", "psk2");
-		uci_session_set(&u, name, "ssid", mesh.backhaul_ssid);
-		uci_session_set(&u, name, "key", mesh.backhaul_key);
-		uci_session_set(&u, name, "disabled", "0");
-	}
-
-	if (u.dirty && !ubus_lookup_id(ubus_ctx, "network", &id)) {
-		uci_session_close(&u);
-		ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
-		return;
-	}
-
-	uci_session_close(&u);
+	mesh_backhaul_bss_set(want);
 }
 
 static void poll_cb(struct uloop_timeout *t)
