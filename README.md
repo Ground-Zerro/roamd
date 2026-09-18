@@ -62,7 +62,7 @@ wget -O - https://raw.githubusercontent.com/Ground-Zerro/roamd/main/install.sh |
 
 ## Лицензия
 
-GPL-3.0-only, см. [LICENSE](LICENSE).
+Apache-2.0, см. [LICENSE](LICENSE).
 
 ---
 
@@ -131,4 +131,4 @@ Full documentation (in Russian) — [docs/README.md](docs/README.md).
 
 ## License
 
-GPL-3.0-only, see [LICENSE](LICENSE).
+Apache-2.0, see [LICENSE](LICENSE).
