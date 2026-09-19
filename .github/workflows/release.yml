@@ -74,7 +74,22 @@ jobs:
           key: feeds-${{ matrix.release }}
 
       - name: Build packages
-        run: RELEASE=${{ matrix.release }} ./build.sh ${{ matrix.arch }}
+        run: |
+          if ! RELEASE=${{ matrix.release }} ./build.sh ${{ matrix.arch }}; then
+            echo "::group::Журнал сборки SDK"
+            find build -name build.log -exec sh -c 'echo "--- $1"; tail -n 200 "$1"' _ {} \;
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-log-${{ matrix.branch }}-${{ matrix.arch }}
+          path: build/**/build.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Prepare signing keys
         env:

@@ -223,7 +223,7 @@ static void base_name(const char *ifname, char *out, size_t len, bool *tagged)
 	if (*tagged)
 		snprintf(out, len, "%.*s", (int)(dot - ifname), ifname);
 	else
-		snprintf(out, len, "%s", ifname);
+		snprintf(out, len, "%.*s", (int)len - 1, ifname);
 }
 
 static uint16_t seg_section_vid(const struct uci_section *s)

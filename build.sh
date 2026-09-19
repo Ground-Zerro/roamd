@@ -112,9 +112,11 @@ prepare_feeds() {
 		done
 	fi
 
-	( cd "$dir" && ./scripts/feeds update base luci >/dev/null 2>&1 )
-	( cd "$dir" && ./scripts/feeds install -a -p luci >/dev/null 2>&1 )
-	( cd "$dir" && ./scripts/feeds install -p base libubox libubus libuci ucode >/dev/null 2>&1 )
+	if [ ! -d "$dir/package/feeds/luci/luci-base" ] || [ ! -d "$dir/package/feeds/base/uclient" ]; then
+		( cd "$dir" && ./scripts/feeds update base luci >/dev/null 2>&1 )
+		( cd "$dir" && ./scripts/feeds install -a -p luci >/dev/null 2>&1 )
+		( cd "$dir" && ./scripts/feeds install -p base libubox libubus libuci ucode uclient ustream-ssl >/dev/null 2>&1 )
+	fi
 
 	for name in base luci; do
 		if [ ! -d "$dir/feeds/$name" ] || [ ! -f "$dir/feeds/$name.index" ]; then

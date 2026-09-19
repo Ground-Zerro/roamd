@@ -153,6 +153,14 @@ pkg_installed() {
 	fi
 }
 
+check_conflicts() {
+	for p in usteer dawn; do
+		pkg_installed "$p" || continue
+		err "На устройстве установлен $p — он тоже управляет роумингом, и вместе с roamd они будут мешать друг другу. Удалите $p и повторите установку."
+		exit 1
+	done
+}
+
 ask_ru() {
 	pkg_installed "$PACKAGES_RU" && return 0
 	[ -c /dev/tty ] || return 0
@@ -167,6 +175,7 @@ ask_ru() {
 }
 
 main() {
+	check_conflicts
 	check_system
 
 	if [ "${1-}" = "--check" ]; then
