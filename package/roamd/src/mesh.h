@@ -174,7 +174,7 @@ struct mesh_pkg_meta {
 typedef void (*mesh_pkg_cb)(void *priv, bool ok, char *data, size_t len);
 typedef void (*mesh_pkg_ready)(void *priv, bool ok);
 
-bool mesh_pkg_get(const char *url, const char *path, bool pinned, mesh_pkg_cb cb, void *priv);
+bool mesh_pkg_get(const char *url, const char *path, mesh_pkg_cb cb, void *priv);
 bool mesh_pkg_feed_url(const char *branch, const char *arch, char *out, size_t len);
 bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 		      mesh_pkg_ready cb, void *priv);

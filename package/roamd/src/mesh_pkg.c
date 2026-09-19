@@ -18,6 +18,7 @@
 #define SYNC_WAIT_MAX	300000
 #define PKG_INDEX_MAX	1048576
 #define PKG_CACHE_TTL	300000
+#define PKG_REDIRECT_MAX	5
 
 struct pkg_fetch {
 	struct uloop_timeout finish;
@@ -27,6 +28,7 @@ struct pkg_fetch {
 	char *buf;
 	size_t len;
 	FILE *out;
+	unsigned int redirects;
 	bool ok;
 	mesh_pkg_cb cb;
 	void *priv;
@@ -168,6 +170,17 @@ static void read_cb(struct uclient *cl)
 	}
 }
 
+static void header_done_cb(struct uclient *cl)
+{
+	struct pkg_fetch *f = cl->priv;
+
+	if (f->redirects >= PKG_REDIRECT_MAX)
+		return;
+
+	if (uclient_http_redirect(cl))
+		f->redirects++;
+}
+
 static void eof_cb(struct uclient *cl)
 {
 	struct pkg_fetch *f = cl->priv;
@@ -184,13 +197,24 @@ static void error_cb(struct uclient *cl, int code)
 static const struct uclient_cb fetch_cb = {
 	.data_read = read_cb,
 	.data_eof = eof_cb,
+	.header_done = header_done_cb,
 	.error = error_cb,
 };
 
-bool mesh_pkg_get(const char *url, const char *path, bool pinned, mesh_pkg_cb cb, void *priv)
+static bool fetch_add_ca(struct pkg_fetch *f, const char *path)
 {
-	const char *ca = pinned ? PKG_CERT : SYS_CERTS;
+	if (access(path, R_OK))
+		return false;
+
+	f->ops->context_add_ca_crt_file(f->ssl, path);
+
+	return true;
+}
+
+bool mesh_pkg_get(const char *url, const char *path, mesh_pkg_cb cb, void *priv)
+{
 	struct pkg_fetch *f = calloc(1, sizeof(*f));
+	bool verify;
 
 	if (!f)
 		return false;
@@ -209,18 +233,17 @@ bool mesh_pkg_get(const char *url, const char *path, bool pinned, mesh_pkg_cb cb
 	if (!f->ssl)
 		goto fail;
 
-	if (access(ca, R_OK))
-		ca = NULL;
+	verify = fetch_add_ca(f, SYS_CERTS);
 
-	if (ca)
-		f->ops->context_add_ca_crt_file(f->ssl, ca);
+	if (fetch_add_ca(f, PKG_CERT))
+		verify = true;
 
 	f->cl = uclient_new(url, NULL, &fetch_cb);
 	if (!f->cl)
 		goto fail;
 
 	f->cl->priv = f;
-	uclient_http_set_ssl_ctx(f->cl, f->ops, f->ssl, ca != NULL);
+	uclient_http_set_ssl_ctx(f->cl, f->ops, f->ssl, verify);
 	uclient_set_timeout(f->cl, PKG_TIMEOUT);
 
 	if (uclient_connect(f->cl) || uclient_http_set_request_type(f->cl, "GET") ||
@@ -356,7 +379,7 @@ static void packages_ready(void *priv, bool ok, char *data, size_t len)
 	snprintf(url, sizeof(url), "%s/packages.adb", job->url);
 	job->slot->meta.adb = true;
 
-	if (!mesh_pkg_get(url, NULL, true, adb_ready, job))
+	if (!mesh_pkg_get(url, NULL, adb_ready, job))
 		index_done(job, false);
 }
 
@@ -383,7 +406,7 @@ bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 
 	snprintf(url, sizeof(url), "%s/Packages", job->url);
 
-	if (!mesh_pkg_get(url, NULL, true, packages_ready, job)) {
+	if (!mesh_pkg_get(url, NULL, packages_ready, job)) {
 		free(job);
 
 		return false;
@@ -510,7 +533,7 @@ bool mesh_pkg_download(const char *branch, const char *arch, const char *name,
 
 	snprintf(url + strlen(url), sizeof(url) - strlen(url), "/%s", job->meta.file);
 
-	if (!mesh_pkg_get(url, job->path, true, download_ready, job)) {
+	if (!mesh_pkg_get(url, job->path, download_ready, job)) {
 		free(job);
 
 		return false;
@@ -549,7 +572,7 @@ bool mesh_pkg_probe(const char *url)
 {
 	struct sync_state s = { 0 };
 
-	if (!mesh_pkg_get(url, "/dev/null", false, probe_ready, &s))
+	if (!mesh_pkg_get(url, "/dev/null", probe_ready, &s))
 		return false;
 
 	return sync_wait(&s);

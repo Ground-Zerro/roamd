@@ -17,7 +17,7 @@ permissions:
 jobs:
   matrix:
     name: Build matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       jobs: ${{ steps.build.outputs.jobs }}
       version: ${{ steps.build.outputs.version }}
@@ -49,7 +49,7 @@ jobs:
 
   build:
     name: ${{ matrix.branch }} ${{ matrix.arch }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: matrix
     strategy:
       fail-fast: false
@@ -113,7 +113,7 @@ jobs:
 
   publish:
     name: Publish release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [matrix, build]
     steps:
       - uses: actions/checkout@v7
