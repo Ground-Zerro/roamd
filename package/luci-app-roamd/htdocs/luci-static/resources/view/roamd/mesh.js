@@ -7,6 +7,8 @@
 'require view.roamd.common as common';
 'require uci';
 
+var nodeUiOpen = false;
+
 var callMeshStatus = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_status',
@@ -90,15 +92,23 @@ var callMeshSelfUpdate = rpc.declare({
 var callMeshMemberUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_update',
-	params: [ 'id', 'name' ],
+	params: [ 'id', 'name', 'band', 'nodes' ],
 	expect: { }
 });
 
 var callMeshSettings = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
-	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'backhaul_delta',
-		'backhaul_min_signal', 'auto_update', 'auto_update_every', 'auto_update_unit', 'pkg_url' ],
+	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'node_ui',
+		'backhaul_delta', 'backhaul_min_signal', 'auto_update', 'auto_update_every',
+		'auto_update_unit', 'pkg_url' ],
+	expect: { }
+});
+
+var callMeshNetworkUpdate = rpc.declare({
+	object: 'roamd',
+	method: 'mesh_network_update',
+	params: [ 'ssid', 'roaming' ],
 	expect: { }
 });
 
@@ -248,6 +258,12 @@ var ACQUIRE_MSG = [
 	[ /^package source is not trusted: .*$/, function() { return _('the package source is not trusted: the repository must be https and its certificate must be in /etc/roamd/pkg.crt'); } ],
 	[ /^installing roamd and interface for (.+)$/, function(m) { return _('packages for OpenWrt %s').format(m[1]); } ],
 	[ /^repository unreachable, installed from the controller cache$/, function() { return _('repository unreachable, installed from the cache'); } ],
+	[ /^checking what the node needs from the OpenWrt feeds$/, function() { return _('checking what the node needs from the OpenWrt repositories'); } ],
+	[ /^cannot ask the node which packages it needs$/, function() { return _('the node did not report which packages it needs'); } ],
+	[ /^(\S+) is installed on the device and conflicts with roamd — remove it or reset the device to factory settings$/, function(m) { return _('%s is installed on the device and conflicts with roamd: remove it or reset the device to factory settings').format(m[1]); } ],
+	[ /^the node needs (.+) but has no OpenWrt package feeds — capture stopped before the node was changed$/, function(m) { return _('the node needs %s, but it has no OpenWrt package repositories; capture stopped before any change to the node').format(m[1]); } ],
+	[ /^the node needs (.+) from (\S+), which the controller cannot reach — capture stopped before the node was changed$/, function(m) { return _('the node needs %s from %s, but the controller cannot reach it; capture stopped before any change to the node').format(m[1], m[2]); } ],
+	[ /^the node at (\S+) is still a router \((.+)\) — single subnet not applied$/, function(m) { return _('the node at %s is still a router (%s): the single subnet was not applied').format(m[1], m[2]); } ],
 	[ /^assigning node role$/, function() { return _('assigning the node role'); } ],
 	[ /^switching the node to the controller subnet$/, function() { return _('switching to the controller subnet'); } ],
 	[ /^checking 802.11v support on the node$/, function() { return _('checking 802.11v support'); } ],
@@ -372,6 +388,7 @@ function discoverDialog() {
 }
 
 var PKG_STATE_TEXT = {
+	conflict: _('%s is installed on the device: it also manages roaming and would interfere with roamd. Remove it or reset the device to factory settings'),
 	missing: _('OpenWrt %s (%s) is not supported: the repository has no roamd package for this version and architecture'),
 	unreachable: _('Could not check for the roamd package for OpenWrt %s (%s): the package repository is unreachable. Check the internet access of the controller and search again')
 };
@@ -386,7 +403,7 @@ function renderCandidate(c) {
 
 	if (!ready)
 		lines.push(E('div', { 'style': 'color:#c33' }, E('small', {},
-			PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?'))));
+			(c.pkg === 'conflict' ? PKG_STATE_TEXT.conflict.format(c.conflict) : PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?')))));
 
 	var action = E('button', {
 		'class': 'btn cbi-button cbi-button-action',
@@ -570,51 +587,23 @@ function renderNodes(state) {
 	var table = E('table', { 'class': 'table cbi-section-table' }, [
 		E('tr', { 'class': 'tr table-titles' }, [
 			E('th', { 'class': 'th' }, _('Node name')),
-			E('th', { 'class': 'th' }, _('Clients')),
+			E('th', { 'class': 'th', 'style': 'width:1%;white-space:nowrap' }, _('Client count')),
 			E('th', { 'class': 'th' }, _('Status')),
 			E('th', { 'class': 'th' }, _('Uptime')),
-			E('th', { 'class': 'th' }, _('IP address')),
-			E('th', { 'class': 'th' }, _('MAC')),
 			E('th', { 'class': 'th' }, _('Via')),
 			E('th', { 'class': 'th' }, _('Connection')),
-			E('th', { 'class': 'th' }, _('Version')),
 			E('th', { 'class': 'th' }, '')
 		])
 	]);
 	var rows = [ controllerRow(state) ].concat(members.map(function(m) {
-		var srcHint = { repository: _('package taken from the repository'),
-				cache: _('repository was unreachable, package taken from the controller cache') };
-		var ver = versionCell(m.os_version, m.pkg_version, [
-			m.pkg_source === 'cache' ? ' ⚠' : '',
-			m.update_available ? E('span', { 'style': 'color:#c60', 'title': _('update available') }, ' ⬆') : ''
-		]);
-
-		if (srcHint[m.pkg_source])
-			ver.setAttribute('title', srcHint[m.pkg_source]);
-
-		var actions = E('div', {}, [
-			state.auto_update ? '' : E('button', {
-				'class': 'btn cbi-button cbi-button-apply',
-				'style': 'margin-right:.3em',
-				'disabled': m.update_available && !busy ? null : 'disabled',
-				'title': busy ? _('another task is running') :
-					(m.update_available ? _('update available') : _('no updates available')),
-				'click': function() { updateMember(m.id, m.name); }
-			}, _('Update')),
-			E('button', {
-				'class': 'btn cbi-button cbi-button-remove',
-				'click': function() { removeMember(m.id, m.name); }
-			}, _('Remove'))
-		]);
-
-		var conn = m.connection === 'wifi'
-			? (m.uplink_band ? '%s %s %s'.format(_('Wi-Fi'), m.uplink_band, _('GHz')) : _('Wi-Fi'))
-			: (m.connection === 'wired' ? _('Cable') : '-');
-		var via = viaLabel(m, state);
+		var actions = E('button', {
+			'class': 'btn cbi-button',
+			'click': function() { nodeDialog(m, state, refreshNodes); }
+		}, readOnly ? _('Details') : _('Settings'));
 
 		return [ nameCell(m), m.client_count || 0, consistencyCell(m.online, m),
-			m.uptime ? '%t'.format(m.uptime) : '-', nodeAddrCell(m), m.mac || '-',
-			via, conn, ver, actions ];
+			m.uptime ? '%t'.format(m.uptime) : '-', viaLabel(m, state),
+			connectionCell(m), actions ];
 	}));
 
 	cbi_update_table(table, rows, E('em', {}, _('No nodes yet')));
@@ -622,38 +611,106 @@ function renderNodes(state) {
 	return E('div', {}, [ deps, running, intro, E('div', {}, addButton), E('br'), table ]);
 }
 
-function versionCell(os, pkg, marks) {
-	var lines = [ os ? 'OpenWrt %s'.format(os) : '-' ];
+function connectionCell(m) {
+	if (m.connection !== 'wifi')
+		return m.connection === 'wired' ? _('Cable') : '-';
 
-	if (pkg)
-		lines.push(E('br'), 'roamd %s'.format(pkg));
+	var head = m.uplink_band
+		? '%s %s %s'.format(_('Wi-Fi'), m.uplink_band, _('GHz'))
+		: _('Wi-Fi');
 
-	return E('div', { 'style': 'white-space:nowrap' }, lines.concat(marks || []));
+	if (m.uplink_signal)
+		head = '%s: %d %s'.format(head, m.uplink_signal, _('dBm'));
+
+	var parts = [];
+
+	if (m.uplink_std)
+		parts.push(m.uplink_std);
+	if (m.uplink_nss)
+		parts.push('%dx%d'.format(m.uplink_nss, m.uplink_nss));
+	if (m.uplink_width)
+		parts.push('%d %s'.format(m.uplink_width, _('MHz')));
+
+	return E('div', { 'style': 'white-space:nowrap' }, [
+		E('div', {}, head),
+		parts.length ? E('div', {}, E('small', { 'style': 'color:#888' }, parts.join(' '))) : ''
+	]);
+}
+
+function controllerDialog(state) {
+	var self = state.self || {};
+	var name = state.controller_name || '';
+	var nameInput = E('input', {
+		'type': 'text', 'class': 'cbi-input-text', 'style': 'width:100%',
+		'value': name,
+		'placeholder': self.hostname || _('This device'),
+		'disabled': readOnly ? 'disabled' : null
+	});
+	var counts = state.counts || {};
+	var info = [
+		infoRow(_('Role'), _('controller')),
+		infoRow(_('Clients'), String(state.controller_clients || 0)),
+		infoRow(_('Nodes'), String(counts.nodes || 0)),
+		infoRow(_('Uptime'), self.uptime ? '%t'.format(self.uptime) : '—'),
+		infoRow(_('IP address'), self.addr || '—'),
+		infoRow(_('MAC address'), self.mac || '—'),
+		infoRow(_('System name'), self.hostname || '—'),
+		infoRow(_('Software'), '%s / roamd %s'.format(self.os_version ? 'OpenWrt ' + self.os_version : '—',
+			self.pkg_version || '—'))
+	];
+
+	if (state.deps_state)
+		info.push(infoRow(_('Preparation'), state.deps_state));
+
+	function save() {
+		ui.hideModal();
+		callMeshControllerName(nameInput.value).then(refreshNodes);
+	}
+
+	var actions = readOnly || state.auto_update ? [] : [
+		E('button', {
+			'class': 'btn cbi-button-apply',
+			'click': function() { ui.hideModal(); checkSelfUpdate(); }
+		}, _('Check for updates'))
+	];
+
+	var buttons = readOnly
+		? [ E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')) ]
+		: [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+			' ',
+			E('button', { 'class': 'btn cbi-button-positive', 'click': save }, _('Save'))
+		];
+
+	ui.showModal(state.controller_name || self.hostname || _('This device'), [
+		E('h4', {}, _('Basic settings')),
+		E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('Controller name')),
+			E('div', { 'class': 'cbi-value-field' }, nameInput)
+		]),
+		E('h4', {}, _('Details')),
+		E('div', {}, info),
+		actions.length ? E('div', { 'style': 'margin-top:1em' }, actions) : '',
+		E('div', { 'class': 'right' }, buttons)
+	]);
 }
 
 function controllerRow(state) {
 	var self = state.self || {};
 	var name = state.controller_name || self.hostname || _('This device');
 	var cell = E('div', {}, [
-		E('div', {}, [
-			E('strong', {}, name),
-			pencil(function() { renameController(state.controller_name || ''); })
-		]),
+		E('div', {}, E('strong', {}, name)),
 		E('div', {}, E('small', { 'style': 'color:#888' }, _('controller')))
 	]);
-	var ver = versionCell(self.os_version, self.pkg_version);
-
-	var check = state.auto_update ? '' : E('button', {
+	var check = E('button', {
 		'class': 'btn cbi-button',
-		'disabled': readOnly ? 'disabled' : null,
-		'click': function() { checkSelfUpdate(); }
-	}, _('Check for updates'));
+		'click': function() { controllerDialog(state); }
+	}, readOnly ? _('Details') : _('Settings'));
 
 	return [ cell, state.controller_clients || 0,
 		E('span', { 'style': 'color:#2e9e2e', 'title': _('this device') }, '●'),
 		self.uptime ? '%t'.format(self.uptime) : '-',
-		self.addr || '-', self.mac || '-',
-		'—', _('this device'), ver, check ];
+		'—', _('this device'), check ];
 }
 
 function checkSelfUpdate() {
@@ -733,51 +790,21 @@ function startSelfUpdate(body) {
 	});
 }
 
-function renameController(current) {
-	nameDialog(_('Controller name'), current, function(name) {
-		if (name === current)
-			return;
-
-		callMeshControllerName(name).then(refreshNodes);
-	});
-}
-
-function nodeAddrCell(m) {
-	if (!m.addr)
-		return '-';
-
-	return E('span', {}, [
-		m.addr, ' ',
-		E('a', {
-			'href': 'http://%s/'.format(m.addr),
-			'target': '_blank',
-			'rel': 'noreferrer',
-			'title': _('Open the node web interface'),
-			'style': 'text-decoration:none'
-		}, '🌐')
-	]);
-}
-
 function nameCell(m) {
 	var alias = m.name || m.hostname || m.id;
 	var sys = (m.hostname && m.hostname !== alias) ? m.hostname : '';
+	var link = nodeUiOpen && m.addr ? E('a', {
+		'href': 'http://%s/'.format(m.addr),
+		'target': '_blank',
+		'rel': 'noreferrer',
+		'title': _('Open the node web interface'),
+		'style': 'text-decoration:none;margin-left:.4em'
+	}, '🌐') : '';
 
 	return E('div', {}, [
-		E('div', {}, [
-			E('strong', {}, alias),
-			pencil(function() { renameMember(m.id, m.name); })
-		]),
+		E('div', {}, [ E('strong', {}, alias), link ]),
 		sys ? E('div', {}, E('small', { 'style': 'color:#888' }, sys)) : ''
 	]);
-}
-
-function renameMember(id, current) {
-	nameDialog(_('Rename node'), current, function(name) {
-		if (name === current)
-			return;
-
-		callMeshMemberUpdate(id, name).then(refreshNodes);
-	});
 }
 
 function refreshNodes() {
@@ -1017,45 +1044,6 @@ function bandLockLabel(band) {
 
 var readOnly = false;
 
-function pencil(onclick) {
-	if (readOnly)
-		return E('span', {
-			'style': 'margin-left:.4em;color:#ccc',
-			'title': _('Managed by the controller')
-		}, '✎');
-
-	return E('span', {
-		'style': 'cursor:pointer;margin-left:.4em;color:#888',
-		'title': _('Edit'),
-		'click': onclick
-	}, '✎');
-}
-
-function nameDialog(title, current, onOk) {
-	var input = E('input', {
-		'type': 'text', 'class': 'cbi-input-text', 'style': 'width:100%',
-		'value': current || '',
-		'keydown': function(ev) { if (ev.key === 'Enter') submit(); }
-	});
-
-	function submit() {
-		ui.hideModal();
-		onOk(input.value);
-	}
-
-	ui.showModal('', [
-		E('h4', { 'style': 'text-align:center;margin-top:0' }, title),
-		E('div', { 'class': 'cbi-value' }, input),
-		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
-			' ',
-			E('button', { 'class': 'btn cbi-button-positive', 'click': submit }, _('OK'))
-		])
-	]);
-
-	input.focus();
-}
-
 function infoRow(label, value) {
 	return E('div', { 'class': 'cbi-value' }, [
 		E('label', { 'class': 'cbi-value-title' }, label),
@@ -1202,6 +1190,108 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		}, _('Restore default roaming'))),
 		E('h4', {}, _('Details')),
 		E('div', {}, info),
+		E('div', { 'class': 'right' }, buttons)
+	]);
+}
+
+function nodeDialog(m, state, refresh) {
+	var title = m.name || m.hostname || m.id;
+	var nameInput = E('input', {
+		'type': 'text', 'class': 'cbi-input-text', 'style': 'width:100%',
+		'value': m.name || '',
+		'placeholder': m.hostname || m.id,
+		'disabled': readOnly ? 'disabled' : null
+	});
+	var bands = bandChoice(m.bh_band === '2.4' ? '2' : (m.bh_band === '5' ? '5' : 'both'));
+	var parents = (state.members || [])
+		.filter(function(o) { return o.id !== m.id; })
+		.map(function(o) { return { id: o.id, label: o.name || o.hostname || o.id }; });
+
+	parents.unshift({ id: 'controller', label: controllerLabel(state) });
+
+	var chips = nodeChips(parents, m.bh_nodes ? m.bh_nodes.split('-') : []);
+	var conn = m.connection === 'wifi'
+		? (m.uplink_band ? _('Wi-Fi %s GHz').format(m.uplink_band) : _('Wi-Fi'))
+		: (m.connection === 'wired' ? _('Cable') : '—');
+	var info = [
+		infoRow(_('Status'), m.online ? _('online') : _('offline')),
+		infoRow(_('Connection'), conn),
+		infoRow(_('Via'), viaLabel(m, state) || '—'),
+		infoRow(_('Clients'), String(m.client_count || 0)),
+		infoRow(_('Uptime'), m.uptime ? '%t'.format(m.uptime) : '—'),
+		infoRow(_('IP address'), m.addr || '—'),
+		infoRow(_('MAC address'), m.mac || '—'),
+		infoRow(_('System name'), m.hostname || '—'),
+		infoRow(_('Software'), '%s / roamd %s%s'.format(m.os_version ? 'OpenWrt ' + m.os_version : '—',
+			m.pkg_version || '—', m.update_available ? ' ⬆' : ''))
+	];
+
+	if (m.connection === 'wifi' && m.uplink_signal)
+		info.splice(2, 0, infoRow(_('Uplink signal'), '%d %s'.format(m.uplink_signal, _('dBm'))));
+
+	if (m.consistency && m.consistency !== 'ok')
+		info.push(infoRow(_('Profile check'), m.issues || m.consistency));
+
+	if (m.seg_issue)
+		info.push(infoRow(_('Segment'), m.seg_issue));
+
+	function save() {
+		var band = bands.filter(function(l) { return l.firstChild.checked; })
+			.map(function(l) { return l.firstChild.value; })[0] || 'both';
+
+		ui.hideModal();
+		callMeshMemberUpdate(m.id, nameInput.value, band === '2' ? '2.4' : band,
+			chips.value()).then(refresh);
+	}
+
+	var busy = state.acquire && state.acquire.running;
+	var actions = readOnly ? [] : [
+		E('button', {
+			'class': 'btn cbi-button-apply',
+			'style': 'margin-right:.4em',
+			'disabled': m.update_available && !busy ? null : 'disabled',
+			'title': busy ? _('another task is running')
+				: (m.update_available ? _('update available') : _('no updates available')),
+			'click': function() { ui.hideModal(); updateMember(m.id, m.name); }
+		}, _('Update')),
+		E('button', {
+			'class': 'btn cbi-button-remove',
+			'click': function() { ui.hideModal(); removeMember(m.id, m.name); }
+		}, _('Remove node'))
+	];
+
+	var buttons = readOnly
+		? [ E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')) ]
+		: [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+			' ',
+			E('button', { 'class': 'btn cbi-button-positive', 'click': save }, _('Save'))
+		];
+
+	ui.showModal(title, [
+		E('h4', {}, _('Basic settings')),
+		E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('Node name')),
+			E('div', { 'class': 'cbi-value-field' }, nameInput)
+		]),
+
+		E('h4', {}, _('Wireless uplink of this node')),
+		E('p', { 'class': 'cbi-value-description' },
+			_('Applies to the wireless link only. A cable uplink is always allowed and is always preferred.')),
+		E('div', { 'class': 'cbi-value' }, bands),
+		E('div', { 'class': 'cbi-value' }, chips.widget),
+		readOnly ? '' : E('div', { 'class': 'cbi-value' }, E('button', {
+			'class': 'btn',
+			'click': function(ev) {
+				ev.preventDefault();
+				chips.reset();
+				bands.forEach(function(l) { l.firstChild.checked = l.firstChild.value === 'both'; });
+			}
+		}, _('Allow any device and band'))),
+
+		E('h4', {}, _('Details')),
+		E('div', {}, info),
+		actions.length ? E('div', { 'style': 'margin-top:1em' }, actions) : '',
 		E('div', { 'class': 'right' }, buttons)
 	]);
 }
@@ -1433,12 +1523,77 @@ function lastCheckText(state) {
 var BACKHAUL_FIELDS = [ 'backhaul_ssid', 'backhaul_key' ];
 var settingsSync;
 
+function bandsLabel(bands) {
+	var list = [];
+
+	if (bands & 1)
+		list.push('2.4 ' + _('GHz'));
+	if (bands & 2)
+		list.push('5 ' + _('GHz'));
+
+	return list.length ? list.join(', ') : '—';
+}
+
+function renderNetworks(state) {
+	var nets = state.networks || [];
+	var rows = [ E('div', { 'class': 'tr table-titles' }, [
+		E('div', { 'class': 'th' }, _('Network')),
+		E('div', { 'class': 'th' }, _('Security')),
+		E('div', { 'class': 'th' }, _('Bands')),
+		E('div', { 'class': 'th' }, _('On the nodes')),
+		E('div', { 'class': 'th' }, _('Roaming'))
+	]) ];
+	var status = E('span', { 'style': 'margin-left:1em' });
+
+	nets.forEach(function(net) {
+		var box = E('input', {
+			'type': 'checkbox',
+			'checked': net.roaming ? 'checked' : null,
+			'disabled': readOnly || null,
+			'change': function(ev) {
+				var on = ev.target.checked;
+
+				status.textContent = _('Saving…');
+				callMeshNetworkUpdate(net.ssid, on ? '1' : '0').then(function() {
+					status.textContent = _('Saved.');
+				}, function() {
+					ev.target.checked = !on;
+					status.textContent = _('Save failed.');
+				});
+			}
+		});
+
+		rows.push(E('div', { 'class': 'tr' }, [
+			E('div', { 'class': 'td' }, net.ssid),
+			E('div', { 'class': 'td' }, net.encryption || 'none'),
+			E('div', { 'class': 'td' }, bandsLabel(net.bands || 0)),
+			E('div', { 'class': 'td' }, net.segment
+				? E('span', { 'class': 'label' },
+					_('segment %d: over the wireless backhaul, and over cable on nodes without a shared switch').format(net.vid || 0))
+				: _('yes')),
+			E('div', { 'class': 'td' }, box)
+		]));
+	});
+
+	rows.push(E('div', { 'class': 'tr' }, E('div', { 'class': 'td', 'colspan': '5' },
+		_('Every wireless network of the controller is rolled out to all nodes. A network on its own interface becomes a segment: its traffic runs to the controller separately, tagged with its own VLAN.'))));
+
+	return E('div', {}, [
+		E('h3', {}, _('Wireless networks')),
+		E('p', { 'class': 'cbi-value-description' },
+			_('The nodes broadcast the same networks as the controller. Turn roaming off for a network whose clients should stay on the access point they picked.')),
+		E('div', { 'class': 'table' }, rows),
+		status
+	]);
+}
+
 function renderSettings(state) {
 	var form = {
 		backhaul_enabled: !!state.backhaul_enabled,
 		backhaul_ssid: state.backhaul_ssid || '',
 		backhaul_key: state.backhaul_key || '',
 		wifi_shutdown: !!state.wifi_shutdown,
+		node_ui: !!state.node_ui,
 		backhaul_delta: state.backhaul_delta,
 		backhaul_min_signal: state.backhaul_min_signal,
 		auto_update: !!state.auto_update,
@@ -1600,6 +1755,7 @@ function renderSettings(state) {
 				form.backhaul_enabled ? '1' : '0',
 				form.backhaul_ssid, form.backhaul_key,
 				form.wifi_shutdown ? '1' : '0',
+				form.node_ui ? '1' : '0',
 				String(form.backhaul_delta), String(form.backhaul_min_signal),
 				form.auto_update ? '1' : '0',
 				String(form.auto_update_every), form.auto_update_unit,
@@ -1612,8 +1768,10 @@ function renderSettings(state) {
 	}, _('Save'));
 
 	var bandsField = E('div', { 'class': 'cbi-value-field' }, backhaulBands(state));
+	var netsField = E('div', {}, renderNetworks(state));
 
 	settingsSync = function(fresh) {
+		dom.content(netsField, renderNetworks(fresh));
 		dom.content(bandsField, backhaulBands(fresh));
 		dom.content(lastField, lastCheckText(fresh));
 
@@ -1625,9 +1783,51 @@ function renderSettings(state) {
 		});
 	};
 
+	var nodeUiInput = E('input', {
+		'type': 'checkbox', 'checked': form.node_ui ? 'checked' : null,
+		'disabled': readOnly || null,
+		'change': function(ev) {
+			if (!ev.target.checked) {
+				form.node_ui = false;
+				return;
+			}
+
+			ev.target.checked = false;
+
+			ui.showModal(_('Open the node web interface'), [
+				E('p', {}, _('The web interface of every node will become reachable from the local network.')),
+				E('p', {}, _('A node is not an independent router: its Wi-Fi, addresses and firewall are set by the controller and are overwritten on the next profile rollout. Settings changed on the node itself are lost, and while they are in effect the network may work incorrectly — clients stop moving between devices, or a node drops out of the system.')),
+				E('p', {}, _('Open it only for diagnostics, and close it afterwards.')),
+				E('div', { 'class': 'right' }, [
+					E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+					' ',
+					E('button', {
+						'class': 'btn cbi-button-negative',
+						'click': function() {
+							form.node_ui = true;
+							nodeUiInput.checked = true;
+							ui.hideModal();
+						}
+					}, _('Open access'))
+				])
+			]);
+		}
+	});
+
+	var nodeUiRow = E('div', { 'class': 'cbi-value' }, [
+		E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Allow access to the node web interface')),
+		E('div', { 'class': 'cbi-value-field' }, [
+			nodeUiInput,
+			E('div', { 'class': 'cbi-value-description' },
+				_('Off by default: on a node only the controller is allowed to reach the web interface, everyone else is refused by the node firewall. When enabled, the node address in the table becomes a link.'))
+		])
+	]);
+
 	autoRows();
 
 	return E('div', {}, [
+		netsField,
+
 		E('h3', {}, _('Wireless backhaul')),
 		E('p', { 'class': 'cbi-value-description' }, _('A hidden Wi-Fi network the nodes use to talk to each other. Leave the name and key empty to generate them automatically.')),
 		toggle('backhaul_enabled', _('Wireless backhaul')),
@@ -1641,6 +1841,9 @@ function renderSettings(state) {
 			_('dBm. A weaker link is used only when nothing stronger is heard: 5 GHz gives way to 2.4 GHz, and a parent closer to the controller gives way to a stronger one.'), -95, -40),
 		text('backhaul_ssid', _('Backhaul network name')),
 		text('backhaul_key', _('Backhaul key'), null, true),
+
+		E('h3', {}, _('Node web interface')),
+		nodeUiRow,
 
 		E('h3', {}, _('Wi-Fi operation mode')),
 		toggle('wifi_shutdown', _('Turn off node access points when the controller is unreachable'),
@@ -1699,6 +1902,7 @@ return view.extend({
 		var container = E('div', {}, [ E('h2', {}, _('Mesh Wi-Fi system')) ]);
 
 		readOnly = common.isNode(state);
+		nodeUiOpen = !!state.node_ui;
 
 		if (readOnly)
 			container.appendChild(common.controlBanner(state));
@@ -1716,6 +1920,48 @@ return view.extend({
 	handleReset: null
 });
 
+function renderInfo() {
+	function block(title, lines) {
+		return E('div', { 'style': 'margin-bottom:1.5em' }, [
+			E('h3', {}, title),
+			E('ul', { 'style': 'margin:0 0 0 1.2em' },
+				lines.map(function(t) { return E('li', { 'style': 'margin-bottom:.4em' }, t); }))
+		]);
+	}
+
+	return E('div', { 'style': 'max-width:60em' }, [
+		E('p', {}, _('A Wi-Fi system is several devices that behave as one network. Read this before changing anything on a node.')),
+
+		block(_('What a node becomes after it is captured'), [
+			_('A node stops being an independent router and becomes, in effect, a switch with a radio: it passes traffic through and broadcasts the Wi-Fi network, nothing more.'),
+			_('The node has no router of its own any more: no address handout, no address translation, no separate Wi-Fi settings.'),
+			_('The whole system has one address handout and one address translation — on the controller. Every client, wired or wireless, behind any device, gets its address from the controller and lives in one common network.')
+		]),
+
+		block(_('Where the settings live'), [
+			_('All settings are made on the controller only. From there they are rolled out to every node.'),
+			_('The controller rewrites the node profile on every change and on a schedule. Anything set on the node itself is overwritten on the next rollout — the change will simply disappear.'),
+			_('Until it is overwritten, a setting changed on a node can break the whole network: clients stop moving between devices, a node drops out of the system, or two devices start handing out addresses at once.')
+		]),
+
+		block(_('What to do if a device needs its own settings'), [
+			_('Do not capture it as a node. Leave it a separate router with its own address translation and configure it as usual.'),
+			_('A device already captured can be released: on the Nodes tab choose «Remove» with a reset to factory settings. It becomes independent again.')
+		]),
+
+		block(_('Why the node web interface is closed'), [
+			_('On a node the web interface is reachable only from the controller — its firewall refuses everyone else. This is deliberate: it is what stops settings from being changed in the wrong place.'),
+			_('If a node has to be examined, open the access in Settings — but remember that any change made there lives only until the next rollout.')
+		]),
+
+		block(_('What is normal and needs no action'), [
+			_('A node has no internet «of its own»: it works through the controller.'),
+			_('A node shows no clients of the other devices — each device sees only its own; the whole picture is on the controller, on the Clients tab.'),
+			_('A client that moved to another device disappears from one node and appears on another. That is roaming working, not a fault.')
+		])
+	]);
+}
+
 function buildTabs(state) {
 	var isNode = common.isNode(state);
 
@@ -1730,7 +1976,8 @@ function buildTabs(state) {
 			: { title: _('Nodes'), node: E('div', { 'id': 'mesh-nodes-pane' }, renderNodes(state)) },
 		{ title: _('Clients'), node: renderClients(state) },
 		{ title: _('Transition log'), node: renderLog() },
-		{ title: _('Settings'), node: renderSettings(state) }
+		{ title: _('Settings'), node: renderSettings(state) },
+		{ title: _('Information'), node: renderInfo() }
 	];
 
 	var menu = E('ul', { 'class': 'cbi-tabmenu' });

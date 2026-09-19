@@ -47,18 +47,7 @@ static void option_set_list(struct uci_session *u, struct uci_section *s,
 
 static void mdid_derive(const char *ssid, char *out)
 {
-	uint32_t hash = 2166136261u;
-
-	while (*ssid) {
-		hash ^= (uint8_t)*ssid++;
-		hash *= 16777619u;
-	}
-
-	hash = (hash ^ (hash >> 16)) & 0xffff;
-	if (hash == 0 || hash == 0xffff)
-		hash = 0x4b52;
-
-	snprintf(out, ROAMD_MDID_LEN + 1, "%04x", hash);
+	snprintf(out, ROAMD_MDID_LEN + 1, "%04x", roam_hash16(ssid));
 }
 
 static void iface_provision(struct uci_session *u, struct uci_section *s)
@@ -67,8 +56,9 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 	const char *ssid = uci_lookup_option_string(u->ctx, s, "ssid");
 	const char *disabled = uci_lookup_option_string(u->ctx, s, "disabled");
 	const char *enc = uci_lookup_option_string(u->ctx, s, "encryption");
+	const struct mesh_network *net;
 	char mdid[ROAMD_MDID_LEN + 1];
-	bool ft;
+	bool ft, roaming;
 	size_t i;
 
 	if (!mode || strcmp(mode, "ap") || !ssid)
@@ -77,12 +67,12 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 	if (roam_uci_bool(disabled))
 		return;
 
-	if (config.ssid[0] && strcmp(config.ssid, ssid))
-		return;
+	net = mesh_network_by_ssid(ssid);
+	roaming = !net || net->roaming;
 
 	bool psk, rrb;
 
-	ft = config.fast_transition && encryption_supports_ft(enc);
+	ft = roaming && config.fast_transition && encryption_supports_ft(enc);
 	psk = ft && encryption_is_psk(enc);
 	rrb = ft && !psk && mesh.ft_key[0];
 
@@ -92,11 +82,11 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 		mdid_derive(ssid, mdid);
 
 	const struct wireless_setting settings[] = {
-		{ "ieee80211k", config.neighbor_reports ? "1" : "0" },
-		{ "rrm_neighbor_report", config.neighbor_reports ? "1" : "0" },
-		{ "rrm_beacon_report", config.neighbor_reports ? "1" : "0" },
-		{ "bss_transition", config.bss_transition ? "1" : "0" },
-		{ "wnm_sleep_mode", config.bss_transition ? "1" : "0" },
+		{ "ieee80211k", roaming && config.neighbor_reports ? "1" : "0" },
+		{ "rrm_neighbor_report", roaming && config.neighbor_reports ? "1" : "0" },
+		{ "rrm_beacon_report", roaming && config.neighbor_reports ? "1" : "0" },
+		{ "bss_transition", roaming && config.bss_transition ? "1" : "0" },
+		{ "wnm_sleep_mode", roaming && config.bss_transition ? "1" : "0" },
 		{ "ieee80211r", ft ? "1" : "0" },
 		{ "ft_over_ds", ft && config.ft_over_ds ? "1" : "0" },
 		{ "ft_psk_generate_local", psk ? "1" : "0" },
@@ -123,7 +113,7 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 	}
 }
 
-static void network_reload(void)
+void roam_network_reload(void)
 {
 	uint32_t id;
 
@@ -159,5 +149,5 @@ void roam_wireless_apply(void)
 		return;
 
 	roam_log(ROAM_L_INFO, "roamd: wireless configuration updated, reloading network");
-	network_reload();
+	roam_network_reload();
 }

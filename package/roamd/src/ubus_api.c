@@ -213,6 +213,7 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_string(&b, "backhaul_ssid", mesh.backhaul_ssid);
 		blobmsg_add_string(&b, "backhaul_key", mesh.backhaul_key);
 		blobmsg_add_u8(&b, "wifi_shutdown", mesh.wifi_shutdown);
+		blobmsg_add_u8(&b, "node_ui", mesh.node_ui);
 		blobmsg_add_u32(&b, "backhaul_delta", mesh.backhaul_delta);
 		blobmsg_add_u32(&b, "backhaul_min_signal", mesh.backhaul_min_signal);
 		blobmsg_add_u8(&b, "auto_update", mesh.auto_update);
@@ -236,6 +237,7 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_string(&b, "controller_id", mesh.controller_id);
 		blobmsg_add_string(&b, "controller_name", mesh.controller_name);
 		blobmsg_add_u32(&b, "controller_clients", mesh_clients_local());
+		mesh_networks_dump(&b, "networks");
 
 		self = blobmsg_open_table(&b, "self");
 		mesh_self_info(&b);
@@ -245,6 +247,7 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_string(&b, "backhaul_ssid", mesh.backhaul_ssid);
 		blobmsg_add_string(&b, "backhaul_key", mesh.backhaul_key);
 		blobmsg_add_u8(&b, "wifi_shutdown", mesh.wifi_shutdown);
+		blobmsg_add_u8(&b, "node_ui", mesh.node_ui);
 		blobmsg_add_u32(&b, "backhaul_delta", mesh.backhaul_delta);
 		blobmsg_add_u32(&b, "backhaul_min_signal", mesh.backhaul_min_signal);
 		blobmsg_add_u8(&b, "auto_update", mesh.auto_update);
@@ -266,6 +269,8 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 			blobmsg_add_string(&b, "mac", m->mac);
 			blobmsg_add_string(&b, "addr", m->addr);
 			blobmsg_add_u8(&b, "managed", m->managed);
+			blobmsg_add_string(&b, "bh_band", m->bh_band);
+			blobmsg_add_string(&b, "bh_nodes", m->bh_nodes);
 			mesh_member_live(m->id, &b);
 			blobmsg_close_table(&b, e);
 		}
@@ -292,6 +297,8 @@ enum {
 	MESH_ARG_RESET,
 	MESH_ARG_START,
 	MESH_ARG_STOP,
+	MESH_ARG_SSID,
+	MESH_ARG_ROAMING,
 	__MESH_ARG_MAX
 };
 
@@ -308,6 +315,8 @@ static const struct blobmsg_policy mesh_arg_policy[__MESH_ARG_MAX] = {
 	[MESH_ARG_RESET] = { .name = "reset", .type = BLOBMSG_TYPE_STRING },
 	[MESH_ARG_START] = { .name = "start", .type = BLOBMSG_TYPE_BOOL },
 	[MESH_ARG_STOP] = { .name = "stop", .type = BLOBMSG_TYPE_BOOL },
+	[MESH_ARG_SSID] = { .name = "ssid", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_ROAMING] = { .name = "roaming", .type = BLOBMSG_TYPE_STRING },
 };
 
 static int roamd_mesh_job(struct ubus_context *ctx, struct ubus_object *obj,
@@ -400,6 +409,7 @@ enum {
 	SET_BH_SSID,
 	SET_BH_KEY,
 	SET_WIFI_SHUTDOWN,
+	SET_NODE_UI,
 	SET_BH_DELTA,
 	SET_BH_MIN_SIGNAL,
 	SET_AUTO_UPDATE,
@@ -415,6 +425,7 @@ static const struct blobmsg_policy settings_policy[__SET_MAX] = {
 	[SET_BH_SSID] = { .name = "backhaul_ssid", .type = BLOBMSG_TYPE_STRING },
 	[SET_BH_KEY] = { .name = "backhaul_key", .type = BLOBMSG_TYPE_STRING },
 	[SET_WIFI_SHUTDOWN] = { .name = "wifi_shutdown", .type = BLOBMSG_TYPE_STRING },
+	[SET_NODE_UI] = { .name = "node_ui", .type = BLOBMSG_TYPE_STRING },
 	[SET_BH_DELTA] = { .name = "backhaul_delta", .type = BLOBMSG_TYPE_STRING },
 	[SET_BH_MIN_SIGNAL] = { .name = "backhaul_min_signal", .type = BLOBMSG_TYPE_STRING },
 	[SET_AUTO_UPDATE] = { .name = "auto_update", .type = BLOBMSG_TYPE_STRING },
@@ -430,7 +441,7 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 {
 	static const char *const opts[__SET_MAX] = {
 		"backhaul_enabled", "backhaul_ssid", "backhaul_key",
-		"wifi_shutdown", "backhaul_delta", "backhaul_min_signal",
+		"wifi_shutdown", "node_ui", "backhaul_delta", "backhaul_min_signal",
 		"auto_update", "auto_update_every",
 		"auto_update_unit", "pkg_url", "controller_name"
 	};
@@ -472,11 +483,13 @@ static int roamd_mesh_member_update(struct ubus_context *ctx, struct ubus_object
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_ID] || !tb[MESH_ARG_NAME])
+	if (!tb[MESH_ARG_ID])
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
-	if (!mesh_member_rename(blobmsg_get_string(tb[MESH_ARG_ID]),
-				blobmsg_get_string(tb[MESH_ARG_NAME])))
+	if (!mesh_member_set(blobmsg_get_string(tb[MESH_ARG_ID]),
+			     tb[MESH_ARG_NAME] ? blobmsg_get_string(tb[MESH_ARG_NAME]) : NULL,
+			     tb[MESH_ARG_BAND] ? blobmsg_get_string(tb[MESH_ARG_BAND]) : NULL,
+			     tb[MESH_ARG_NODES] ? blobmsg_get_string(tb[MESH_ARG_NODES]) : NULL))
 		return UBUS_STATUS_NOT_FOUND;
 
 	return 0;
@@ -541,6 +554,42 @@ static int roamd_mesh_report(struct ubus_context *ctx, struct ubus_object *obj,
 
 	blob_buf_init(&b, 0);
 	mesh_node_report(&b);
+	ubus_send_reply(ctx, req, b.head);
+
+	return 0;
+}
+
+static int roamd_mesh_network_update(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	struct blob_attr *tb[__MESH_ARG_MAX];
+
+	if (mesh.role != MESH_CONTROLLER)
+		return UBUS_STATUS_PERMISSION_DENIED;
+
+	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
+
+	if (!tb[MESH_ARG_SSID] || !tb[MESH_ARG_ROAMING])
+		return UBUS_STATUS_INVALID_ARGUMENT;
+
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "saved",
+		       mesh_network_flag(blobmsg_get_string(tb[MESH_ARG_SSID]),
+					 roam_uci_bool(blobmsg_get_string(tb[MESH_ARG_ROAMING]))));
+	ubus_send_reply(ctx, req, b.head);
+
+	return 0;
+}
+
+static int roamd_mesh_profile(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	roam_time_update();
+
+	blob_buf_init(&b, 0);
+	mesh_profile_build(&b);
 	ubus_send_reply(ctx, req, b.head);
 
 	return 0;
@@ -725,6 +774,8 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD("mesh_settings", roamd_mesh_settings, settings_policy),
 	UBUS_METHOD_NOARG("mesh_apply", roamd_mesh_apply),
 	UBUS_METHOD_NOARG("mesh_report", roamd_mesh_report),
+	UBUS_METHOD_NOARG("mesh_profile", roamd_mesh_profile),
+	UBUS_METHOD("mesh_network_update", roamd_mesh_network_update, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_diag", roamd_mesh_diag),
 	UBUS_METHOD("mesh_steer", roamd_mesh_steer, mesh_arg_policy),
 	UBUS_METHOD("mesh_drop", roamd_mesh_drop, mesh_arg_policy),

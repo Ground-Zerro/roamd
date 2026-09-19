@@ -15,16 +15,14 @@
 #include "roamd.h"
 #include "mesh.h"
 
-#define MESH_DISCOVER	"/usr/libexec/roamd/mesh-discover.sh"
-#define MESH_ACQUIRE	"/usr/libexec/roamd/mesh-acquire.sh"
-#define MESH_UPDATE	"/usr/libexec/roamd/mesh-update.sh"
-#define MESH_SELFUPDATE	"/usr/libexec/roamd/mesh-selfupdate.sh"
-#define MESH_POLL	"/usr/libexec/roamd/mesh-poll-all.sh"
-#define MESH_AUTOUPDATE	"/usr/libexec/roamd/mesh-autoupdate.sh"
-#define MESH_RELEASE	"/usr/libexec/roamd/mesh-release.sh"
-#define MESH_SELFCHECK	"/usr/libexec/roamd/mesh-selfcheck.sh"
+#define MESH_DISCOVER	"/usr/sbin/roamd"
+#define MESH_ACQUIRE	"/usr/sbin/roamd"
+#define MESH_SELF	"/usr/sbin/roamd"
+#define MESH_RELEASE	"/usr/sbin/roamd"
 #define MESH_RC_COMMON		"/etc/rc.common"
 #define MESH_NETWORK_INIT	"/etc/init.d/network"
+#define MESH_DNSMASQ_INIT	"/etc/init.d/dnsmasq"
+#define MESH_LEASE_PREFIX	"roamd_"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
 #define SELFCHECK	"/var/run/roamd/selfcheck.json"
 #define ACQUIRE_DIR	"/var/run/roamd/acquire"
@@ -40,24 +38,22 @@
 struct mesh_job {
 	struct mesh_task task;
 	const char *script;
+	const char *arg;
 	const char *result;
 	bool restart;
 };
 
 static void job_done(struct mesh_task *task, int ret);
 static void acquire_done(struct mesh_task *task, int ret);
-static void sync_done(struct mesh_task *task, int ret);
 
-static bool sync_pending;
 
 static struct mesh_job jobs[] = {
-	[MESH_JOB_DISCOVER] = { .task.done = job_done, .script = MESH_DISCOVER, .result = CANDIDATES },
-	[MESH_JOB_SELF_CHECK] = { .task.done = job_done, .script = MESH_SELFCHECK, .result = SELFCHECK },
+	[MESH_JOB_DISCOVER] = { .task.done = job_done, .script = MESH_DISCOVER, .arg = "discover", .result = CANDIDATES },
+	[MESH_JOB_SELF_CHECK] = { .result = SELFCHECK },
 };
 static struct mesh_task acquire_job = { .done = acquire_done };
-static struct mesh_task poll_job;
 static struct mesh_task network_job;
-static struct mesh_task sync_job = { .done = sync_done };
+static struct mesh_task dnsmasq_job;
 static struct uloop_timeout poll_timer;
 static struct uloop_timeout autoupdate_timer;
 static char acquire_task[32];
@@ -66,8 +62,10 @@ static const char *acquire_kind = "";
 
 static void job_start(struct mesh_job *job)
 {
+	char *argv[3] = { (char *)job->script, (char *)job->arg, NULL };
+
 	unlink(job->result);
-	mesh_task_start(&job->task, job->script, NULL, NULL);
+	mesh_task_run(&job->task, argv);
 }
 
 static void job_done(struct mesh_task *task, int ret)
@@ -85,6 +83,21 @@ void mesh_ctrl_job(enum mesh_job_kind kind, bool start, bool stop, struct blob_b
 {
 	struct mesh_job *job = &jobs[kind];
 	char *data;
+
+	if (kind == MESH_JOB_SELF_CHECK) {
+		if (start)
+			mesh_self_check();
+
+		blobmsg_add_u8(b, "running", mesh_self_check_busy());
+
+		data = mesh_slurp(job->result, 32768);
+		if (data) {
+			blobmsg_add_json_from_string(b, data);
+			free(data);
+		}
+
+		return;
+	}
 
 	if (stop) {
 		job->restart = false;
@@ -177,7 +190,34 @@ static struct mesh_member *member_by_id(const char *id)
 	return NULL;
 }
 
-static void acquire_start(const char *kind, const char *script, const char *arg,
+static bool acquire_spawn(const char *script, const char *sub, const char *arg)
+{
+	char *argv[6];
+	unsigned int n = 0;
+
+	if (!sub) {
+		argv[n++] = "/bin/sh";
+		argv[n++] = (char *)script;
+		argv[n++] = (char *)(arg ? arg : "");
+		argv[n++] = acquire_task;
+		argv[n] = NULL;
+
+		return mesh_task_run(&acquire_job, argv);
+	}
+
+	argv[n++] = (char *)script;
+	argv[n++] = (char *)sub;
+
+	if (arg)
+		argv[n++] = (char *)arg;
+
+	argv[n++] = acquire_task;
+	argv[n] = NULL;
+
+	return mesh_task_run(&acquire_job, argv);
+}
+
+static void acquire_start(const char *kind, const char *script, const char *sub, const char *arg,
 			  const char *addr, struct blob_buf *b)
 {
 	if (acquire_job.busy) {
@@ -194,7 +234,7 @@ static void acquire_start(const char *kind, const char *script, const char *arg,
 	snprintf(acquire_addr, sizeof(acquire_addr), "%s", addr ? addr : "");
 	acquire_kind = kind;
 
-	if (!mesh_task_start(&acquire_job, script, arg ? arg : "", acquire_task)) {
+	if (!acquire_spawn(script, sub, arg)) {
 		if (b)
 			blobmsg_add_string(b, "error", "spawn_failed");
 		return;
@@ -211,7 +251,7 @@ void mesh_ctrl_acquire(const char *addr, struct blob_buf *b)
 		return;
 	}
 
-	acquire_start("acquire", MESH_ACQUIRE, addr, addr, b);
+	acquire_start("acquire", MESH_ACQUIRE, "acquire", addr, addr, b);
 }
 
 void mesh_ctrl_release(const char *id, struct blob_buf *b)
@@ -223,7 +263,7 @@ void mesh_ctrl_release(const char *id, struct blob_buf *b)
 		return;
 	}
 
-	acquire_start("release", MESH_RELEASE, id, target->addr, b);
+	acquire_start("release", MESH_RELEASE, "release", id, target->addr, b);
 }
 
 void mesh_ctrl_update(const char *id, struct blob_buf *b)
@@ -235,12 +275,12 @@ void mesh_ctrl_update(const char *id, struct blob_buf *b)
 		return;
 	}
 
-	acquire_start("update", MESH_UPDATE, target->addr, target->addr, b);
+	acquire_start("update", MESH_SELF, "node-update", target->addr, target->addr, b);
 }
 
 void mesh_ctrl_self_update(struct blob_buf *b)
 {
-	acquire_start("selfupdate", MESH_SELFUPDATE, NULL, NULL, b);
+	acquire_start("selfupdate", MESH_SELF, "self-update", NULL, NULL, b);
 }
 
 void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
@@ -339,7 +379,9 @@ void mesh_ctrl_ensure_id(void)
 void mesh_ctrl_bridge_stp(void)
 {
 	struct uci_session u;
+	struct uci_section *lan;
 	struct uci_element *e;
+	const char *bridge;
 	bool changed;
 
 	if (mesh.role != MESH_CONTROLLER || list_empty(&mesh_members))
@@ -348,11 +390,16 @@ void mesh_ctrl_bridge_stp(void)
 	if (!uci_session_open(&u, "network"))
 		return;
 
+	lan = uci_lookup_section(u.ctx, u.pkg, "lan");
+	bridge = lan ? uci_lookup_option_string(u.ctx, lan, "device") : NULL;
+
 	uci_foreach_element(&u.pkg->sections, e) {
 		struct uci_section *s = uci_to_section(e);
 		const char *type = uci_lookup_option_string(u.ctx, s, "type");
+		const char *name = uci_lookup_option_string(u.ctx, s, "name");
 
-		if (strcmp(s->type, "device") || !type || strcmp(type, "bridge"))
+		if (!bridge || strcmp(s->type, "device") || !type || strcmp(type, "bridge") ||
+		    !name || strcmp(name, bridge))
 			continue;
 
 		uci_session_set(&u, s->e.name, "stp", "1");
@@ -405,8 +452,11 @@ void mesh_ctrl_backhaul_apply(void)
 
 static void poll_cb(struct uloop_timeout *t)
 {
-	if (!list_empty(&mesh_members))
-		mesh_task_start(&poll_job, MESH_POLL, "monitor", NULL);
+	if (!list_empty(&mesh_members)) {
+		mesh_poll_run(false);
+		mesh_seg_links_sync();
+		mesh_bridge_wifi_cost();
+	}
 
 	uloop_timeout_set(&poll_timer, MESH_POLL_INTERVAL);
 }
@@ -471,7 +521,7 @@ static void autoupdate_cb(struct uloop_timeout *t)
 		return;
 	}
 
-	acquire_start("autoupdate", MESH_AUTOUPDATE, NULL, NULL, NULL);
+	acquire_start("autoupdate", MESH_SELF, "autoupdate", NULL, NULL, NULL);
 	uloop_timeout_set(t, AUTOUPDATE_STEP * 1000);
 }
 
@@ -486,22 +536,12 @@ void mesh_ctrl_autoupdate_arm(void)
 	uloop_timeout_set(&autoupdate_timer, AUTOUPDATE_SETTLE);
 }
 
-static void sync_done(struct mesh_task *task, int ret)
-{
-	if (!sync_pending)
-		return;
-
-	sync_pending = false;
-	mesh_ctrl_sync();
-}
-
 void mesh_ctrl_sync(void)
 {
 	if (mesh.role != MESH_CONTROLLER || list_empty(&mesh_members))
 		return;
 
-	if (!mesh_task_start(&sync_job, MESH_POLL, "force", NULL))
-		sync_pending = true;
+	mesh_poll_run(true);
 }
 
 void mesh_ctrl_poll_start(void)
@@ -533,7 +573,7 @@ void mesh_member_live(const char *id, struct blob_buf *b)
 	blobmsg_add_u8(b, "online", 0);
 }
 
-bool mesh_member_rename(const char *id, const char *name)
+bool mesh_member_set(const char *id, const char *name, const char *band, const char *nodes)
 {
 	struct uci_session u;
 	struct uci_section *sec;
@@ -542,15 +582,50 @@ bool mesh_member_rename(const char *id, const char *name)
 		return false;
 
 	sec = uci_session_find(&u, "member", "id", id);
-	if (sec)
+
+	if (sec && name)
 		uci_session_set(&u, sec->e.name, "name", name);
+
+	if (sec && band)
+		uci_session_set(&u, sec->e.name, "bh_band",
+				strcmp(band, "both") ? band : "");
+
+	if (sec && nodes) {
+		char buf[MESH_BH_ALLOW_LEN], *save = NULL, *tok;
+
+		uci_session_delete(&u, sec->e.name, "bh_node");
+		snprintf(buf, sizeof(buf), "%s", nodes);
+
+		for (tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save))
+			uci_session_add_list(&u, sec->e.name, "bh_node", tok);
+	}
 
 	uci_session_close(&u);
 
-	if (sec)
+	if (sec) {
 		roam_config_load();
+		mesh_ctrl_sync();
+	}
 
 	return sec != NULL;
+}
+
+static void member_lease_drop(const char *id)
+{
+	struct uci_session u;
+	char name[sizeof(MESH_LEASE_PREFIX) + MESH_ID_MAX];
+	bool changed;
+
+	if (!uci_session_open(&u, "dhcp"))
+		return;
+
+	snprintf(name, sizeof(name), MESH_LEASE_PREFIX "%s", id);
+	uci_session_delete(&u, name, NULL);
+	changed = u.dirty;
+	uci_session_close(&u);
+
+	if (changed)
+		mesh_task_start(&dnsmasq_job, MESH_RC_COMMON, MESH_DNSMASQ_INIT, "reload");
 }
 
 bool mesh_member_remove(const char *id)
@@ -578,6 +653,7 @@ bool mesh_member_remove(const char *id)
 	uci_session_close(&u);
 
 	if (removed) {
+		member_lease_drop(id);
 		mesh_log_forget(id);
 		roam_config_load();
 		mesh_ctrl_backhaul_apply();

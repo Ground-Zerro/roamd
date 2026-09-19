@@ -350,11 +350,6 @@ function applyWizard(probe, ssid, encryption, key) {
 
 	uci.set('roamd', 'global', 'enabled', '1');
 
-	var filter = uci.get('roamd', 'global', 'ssid');
-
-	if (filter && filter !== ssid)
-		uci.set('roamd', 'global', 'ssid', '');
-
 	return uci.save().then(function () {
 		return ui.changes.apply(true);
 	});
@@ -573,10 +568,6 @@ return view.extend({
 		o = s.taboption('general', form.Flag, 'enabled', _('Enable roaming'),
 			_('Start the roaming daemon.'));
 		o.rmempty = false;
-
-		o = s.taboption('general', form.Value, 'ssid', _('Network (SSID)'),
-			_('Leave empty to manage every access point of this router.'));
-		o.placeholder = _('all networks');
 
 		o = s.taboption('general', form.Flag, 'band_steering', _('Band steering'),
 			_('Move dual-band clients to the preferred band when its signal is good enough.'));

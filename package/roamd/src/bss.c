@@ -53,13 +53,17 @@ int roam_bss_invoke(struct roam_bss *bss, const char *method, struct blob_buf *b
 
 bool roam_bss_matches(const struct roam_bss *bss)
 {
+	const struct mesh_network *net;
+
 	if (!bss->active || !bss->ssid[0])
 		return false;
 
 	if (mesh.backhaul_ssid[0] && !strcmp(bss->ssid, mesh.backhaul_ssid))
 		return false;
 
-	return !config.ssid[0] || !strcmp(config.ssid, bss->ssid);
+	net = mesh_network_by_ssid(bss->ssid);
+
+	return !net || net->roaming;
 }
 
 struct roam_bss *roam_bss_by_bssid(const uint8_t *bssid)

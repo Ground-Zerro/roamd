@@ -19,15 +19,6 @@ msgstr "Включить роуминг"
 msgid "Start the roaming daemon."
 msgstr "Запускать службу роуминга."
 
-msgid "Network (SSID)"
-msgstr "Сеть (SSID)"
-
-msgid "Leave empty to manage every access point of this router."
-msgstr "Оставьте пустым, чтобы управлять всеми точками доступа роутера."
-
-msgid "all networks"
-msgstr "все сети"
-
 msgid "Band steering"
 msgstr "Выбор диапазона"
 
@@ -1073,3 +1064,177 @@ msgstr "источник пакетов не доверенный: репози�
 
 msgid "Open the node web interface"
 msgstr "Открыть веб-интерфейс узла"
+
+msgid "checking what the node needs from the OpenWrt repositories"
+msgstr "проверяем, что узлу нужно из репозиториев OpenWrt"
+
+msgid "the node needs %s from %s, but the controller cannot reach it; capture stopped before any change to the node"
+msgstr "узлу нужны %s из %s, но контроллер не может до него достучаться; захват остановлен, узел не изменён"
+
+msgid "the node at %s is still a router (%s): the single subnet was not applied"
+msgstr "узел %s всё ещё работает роутером (%s): единая подсеть не применена"
+
+msgid "the node did not report which packages it needs"
+msgstr "узел не ответил, какие пакеты ему нужны"
+
+msgid "the node needs %s, but it has no OpenWrt package repositories; capture stopped before any change to the node"
+msgstr "узлу нужны %s, но у него не настроены репозитории пакетов OpenWrt; захват остановлен, узел не изменён"
+
+msgid "%s is installed on the device: it also manages roaming and would interfere with roamd. Remove it or reset the device to factory settings"
+msgstr "на устройстве установлен %s: он тоже управляет роумингом и будет мешать roamd. Удалите его или сбросьте устройство к заводским настройкам"
+
+msgid "%s is installed on the device and conflicts with roamd: remove it or reset the device to factory settings"
+msgstr "на устройстве установлен %s, он конфликтует с roamd: удалите его или сбросьте устройство к заводским настройкам"
+
+msgid "Wireless networks"
+msgstr "Беспроводные сети"
+
+msgid "The nodes broadcast the same networks as the controller. Turn roaming off for a network whose clients should stay on the access point they picked."
+msgstr "Узлы вещают те же сети, что и контроллер. Снимите роуминг у сети, клиенты которой должны оставаться на выбранной точке доступа."
+
+msgid "Every wireless network of the controller is rolled out to all nodes. A network on its own interface becomes a segment: its traffic runs to the controller separately, tagged with its own VLAN."
+msgstr "Каждая беспроводная сеть контроллера раскатывается на все узлы. Сеть на отдельном интерфейсе становится сегментом: её трафик идёт до контроллера отдельно, со своей меткой VLAN."
+
+msgid "Network"
+msgstr "Сеть"
+
+msgid "Security"
+msgstr "Защита"
+
+msgid "Bands"
+msgstr "Диапазоны"
+
+msgid "On the nodes"
+msgstr "На узлах"
+
+
+msgid "segment %d: over the wireless backhaul, and over cable on nodes without a shared switch"
+msgstr "сегмент %d: по эфиру, а по кабелю — на узлах без общего коммутатора"
+
+
+msgid "Information"
+msgstr "Информация"
+
+msgid "A Wi-Fi system is several devices that behave as one network. Read this before changing anything on a node."
+msgstr "Wi-Fi-система — это несколько устройств, которые ведут себя как одна сеть. Прочитайте это, прежде чем что-то менять на узле."
+
+msgid "What a node becomes after it is captured"
+msgstr "Чем становится устройство, захваченное как узел"
+
+msgid "A node stops being an independent router and becomes, in effect, a switch with a radio: it passes traffic through and broadcasts the Wi-Fi network, nothing more."
+msgstr "Узел перестаёт быть самостоятельным роутером и превращается, по сути, в свитч с передатчиком: он пропускает через себя трафик и вещает Wi-Fi-сеть — и только."
+
+msgid "The node has no router of its own any more: no address handout, no address translation, no separate Wi-Fi settings."
+msgstr "Своего роутера у узла больше нет: ни раздачи адресов, ни преобразования адресов, ни отдельных настроек Wi-Fi."
+
+msgid "The whole system has one address handout and one address translation — on the controller. Every client, wired or wireless, behind any device, gets its address from the controller and lives in one common network."
+msgstr "На всю систему один раздатчик адресов и одно преобразование адресов — на контроллере. Любой клиент, по проводу или по воздуху, за любым устройством, получает адрес от контроллера и живёт в одной общей сети."
+
+msgid "Where the settings live"
+msgstr "Где находятся настройки"
+
+msgid "All settings are made on the controller only. From there they are rolled out to every node."
+msgstr "Все настройки делаются только на контроллере. Оттуда они раскатываются на все узлы."
+
+msgid "The controller rewrites the node profile on every change and on a schedule. Anything set on the node itself is overwritten on the next rollout — the change will simply disappear."
+msgstr "Контроллер переписывает настройки узла при каждом изменении и по расписанию. Всё, что задано на самом узле, будет перезаписано при ближайшей раскатке — изменение просто исчезнет."
+
+msgid "Until it is overwritten, a setting changed on a node can break the whole network: clients stop moving between devices, a node drops out of the system, or two devices start handing out addresses at once."
+msgstr "Пока изменение не перезаписано, оно способно сломать всю сеть: клиенты перестают переходить между устройствами, узел выпадает из системы, или адреса начинают раздавать сразу два устройства."
+
+msgid "What to do if a device needs its own settings"
+msgstr "Что делать, если устройство нужно настраивать отдельно"
+
+msgid "Do not capture it as a node. Leave it a separate router with its own address translation and configure it as usual."
+msgstr "Не захватывайте его как узел. Оставьте его отдельным роутером со своим преобразованием адресов и настраивайте как обычно."
+
+msgid "A device already captured can be released: on the Nodes tab choose «Remove» with a reset to factory settings. It becomes independent again."
+msgstr "Уже захваченное устройство можно освободить: на вкладке «Узлы» выберите «Удалить» со сбросом к заводским настройкам. Оно снова станет самостоятельным."
+
+msgid "Why the node web interface is closed"
+msgstr "Почему веб-интерфейс узла закрыт"
+
+msgid "On a node the web interface is reachable only from the controller — its firewall refuses everyone else. This is deliberate: it is what stops settings from being changed in the wrong place."
+msgstr "На узле веб-интерфейс доступен только с контроллера — всем остальным его межсетевой экран отказывает. Так сделано намеренно: именно это не даёт менять настройки не в том месте."
+
+msgid "If a node has to be examined, open the access in Settings — but remember that any change made there lives only until the next rollout."
+msgstr "Если узел нужно осмотреть, откройте доступ в «Настройках» — но помните, что любое изменение там живёт только до ближайшей раскатки."
+
+msgid "What is normal and needs no action"
+msgstr "Что нормально и не требует вмешательства"
+
+msgid "A node has no internet «of its own»: it works through the controller."
+msgstr "У узла нет «своего» интернета: он работает через контроллер."
+
+msgid "A node shows no clients of the other devices — each device sees only its own; the whole picture is on the controller, on the Clients tab."
+msgstr "Узел не показывает клиентов других устройств — каждое видит только своих; вся картина есть на контроллере, на вкладке «Клиенты»."
+
+msgid "A client that moved to another device disappears from one node and appears on another. That is roaming working, not a fault."
+msgstr "Клиент, перешедший на другое устройство, пропадает у одного узла и появляется у другого. Это работает роуминг, а не сбой."
+
+msgid "Node web interface"
+msgstr "Веб-интерфейс узлов"
+
+msgid "Allow access to the node web interface"
+msgstr "Разблокировать доступ к веб-интерфейсу узлов"
+
+msgid "Off by default: on a node only the controller is allowed to reach the web interface, everyone else is refused by the node firewall. When enabled, the node address in the table becomes a link."
+msgstr "По умолчанию выключено: на узле веб-интерфейс доступен только контроллеру, всем остальным отказывает межсетевой экран узла. При включении адрес узла в таблице становится ссылкой."
+
+
+msgid "The web interface of every node will become reachable from the local network."
+msgstr "Веб-интерфейс каждого узла станет доступен из локальной сети."
+
+msgid "A node is not an independent router: its Wi-Fi, addresses and firewall are set by the controller and are overwritten on the next profile rollout. Settings changed on the node itself are lost, and while they are in effect the network may work incorrectly — clients stop moving between devices, or a node drops out of the system."
+msgstr "Узел не самостоятельный роутер: его Wi-Fi, адреса и межсетевой экран задаёт контроллер, и при ближайшей раскатке они перезаписываются. Настройки, изменённые на самом узле, теряются, а пока они действуют, сеть может работать неправильно — клиенты перестают переходить между устройствами или узел выпадает из системы."
+
+msgid "Open it only for diagnostics, and close it afterwards."
+msgstr "Открывайте только для диагностики и закрывайте после неё."
+
+msgid "Open access"
+msgstr "Открыть доступ"
+
+msgid "Client count"
+msgstr "Клиентов"
+
+
+msgid "Wireless uplink of this node"
+msgstr "Беспроводное подключение этого узла"
+
+msgid "Applies to the wireless link only. A cable uplink is always allowed and is always preferred."
+msgstr "Относится только к подключению по воздуху. Провод разрешён всегда и всегда предпочтительнее."
+
+msgid "Allow any device and band"
+msgstr "Разрешить любое устройство и диапазон"
+
+msgid "Remove node"
+msgstr "Удалить узел"
+
+msgid "Uplink signal"
+msgstr "Сигнал подключения"
+
+msgid "System name"
+msgstr "Системное имя"
+
+msgid "Software"
+msgstr "Программы"
+
+msgid "Profile check"
+msgstr "Сверка настроек"
+
+msgid "Segment"
+msgstr "Сегмент"
+
+msgid "Role"
+msgstr "Роль"
+
+
+msgid "Preparation"
+msgstr "Подготовка"
+
+
+msgid "dBm"
+msgstr "дБм"
+
+msgid "MHz"
+msgstr "МГц"

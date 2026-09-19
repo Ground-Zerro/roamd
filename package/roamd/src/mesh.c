@@ -8,6 +8,9 @@
 #include <netinet/ether.h>
 #include <libubox/uloop.h>
 
+#include <dlfcn.h>
+#include <libubox/ustream-ssl.h>
+
 #include "roamd.h"
 #include "mesh.h"
 
@@ -20,7 +23,33 @@ static bool deps_ready;
 static void deps_done(struct mesh_task *task, int ret);
 static struct mesh_task deps_job = { .done = deps_done };
 
-pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2)
+void mesh_dir_ensure(const char *path)
+{
+	mkdir(MESH_RUN_DIR, 0755);
+
+	if (path && strcmp(path, MESH_RUN_DIR))
+		mkdir(path, 0755);
+}
+
+struct ustream_ssl_ctx *mesh_ssl_context(const struct ustream_ssl_ops **ops)
+{
+	static const struct ustream_ssl_ops *cached;
+
+	if (!cached) {
+		void *dl = dlopen("libustream-ssl.so", RTLD_LAZY | RTLD_LOCAL);
+
+		cached = dl ? dlsym(dl, "ustream_ssl_ops") : NULL;
+
+		if (!cached)
+			return NULL;
+	}
+
+	*ops = cached;
+
+	return cached->context_new(false);
+}
+
+pid_t mesh_spawn_argv(char *const argv[])
 {
 	pid_t pid = fork();
 
@@ -34,11 +63,19 @@ pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2)
 			dup2(fd, STDERR_FILENO);
 			close(fd);
 		}
-		execl("/bin/sh", "sh", script, arg1, arg2, (char *)NULL);
+
+		execv(argv[0], argv);
 		_exit(127);
 	}
 
 	return pid;
+}
+
+pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2)
+{
+	char *argv[5] = { "/bin/sh", (char *)script, (char *)arg1, (char *)arg2, NULL };
+
+	return mesh_spawn_argv(argv);
 }
 
 static void mesh_task_done(struct uloop_process *p, int ret)
@@ -50,6 +87,26 @@ static void mesh_task_done(struct uloop_process *p, int ret)
 
 	if (task->done)
 		task->done(task, ret);
+}
+
+bool mesh_task_run(struct mesh_task *task, char *const argv[])
+{
+	pid_t pid;
+
+	if (task->busy)
+		return false;
+
+	pid = mesh_spawn_argv(argv);
+
+	if (pid <= 0)
+		return false;
+
+	task->proc.pid = pid;
+	task->proc.cb = mesh_task_done;
+	uloop_process_add(&task->proc);
+	task->busy = true;
+
+	return true;
 }
 
 bool mesh_task_start(struct mesh_task *task, const char *script,
@@ -88,10 +145,12 @@ static void deps_done(struct mesh_task *task, int ret)
 
 static void deps_cb(struct uloop_timeout *t)
 {
+	char *argv[3] = { MESH_DEPS_SCRIPT, "deps-ensure", NULL };
+
 	if (deps_job.busy)
 		return;
 
-	if (!mesh_task_start(&deps_job, MESH_DEPS_SCRIPT, NULL, NULL))
+	if (!mesh_task_run(&deps_job, argv))
 		uloop_timeout_set(&deps_timer, MESH_DEPS_RETRY);
 }
 
@@ -176,8 +235,10 @@ static const struct mesh_field fields[] = {
 	MFIELD("backhaul_ssid", MESH_STR, backhaul_ssid),
 	MFIELD("backhaul_key", MESH_STR, backhaul_key),
 	MFIELD("backhaul_parents", MESH_STR, backhaul_parents),
+	MFIELD("bh_limits", MESH_STR, bh_limits),
 	MFIELD("ft_key", MESH_STR, ft_key),
 	MFIELD("wifi_shutdown", MESH_BOOL, wifi_shutdown),
+	MFIELD("node_ui", MESH_BOOL, node_ui),
 	MFIELD("backhaul_delta", MESH_INT, backhaul_delta),
 	MFIELD("backhaul_min_signal", MESH_INT, backhaul_min_signal),
 	MFIELD("auto_update", MESH_BOOL, auto_update),
@@ -189,10 +250,22 @@ static const struct mesh_field fields[] = {
 	MFIELD("controller_id", MESH_STR, controller_id),
 	MFIELD("controller_name", MESH_STR, controller_name),
 	MFIELD("controller_addr", MESH_STR, controller_addr),
-	MFIELD("member_id", MESH_STR, member_id)
+	MFIELD("controller_mac", MESH_STR, controller_mac),
+	MFIELD("member_id", MESH_STR, member_id),
+	MFIELD("networks_sum", MESH_STR, networks_sum)
 };
 
 #undef MFIELD
+
+void mesh_unquote(char *s)
+{
+	size_t len = strlen(s);
+
+	if (len >= 2 && (s[0] == '"' || s[0] == '\'') && s[len - 1] == s[0]) {
+		memmove(s, s + 1, len - 2);
+		s[len - 2] = 0;
+	}
+}
 
 const char *mesh_role_name(enum mesh_role role)
 {
@@ -678,7 +751,25 @@ void mesh_member_load(struct uci_context *ctx, struct uci_section *s)
 	member_str(ctx, s, "hostname", m->hostname, sizeof(m->hostname));
 	member_str(ctx, s, "mac", m->mac, sizeof(m->mac));
 	member_str(ctx, s, "addr", m->addr, sizeof(m->addr));
+	member_str(ctx, s, "bh_band", m->bh_band, sizeof(m->bh_band));
 	m->managed = managed ? roam_uci_bool(managed) : true;
+
+	{
+		struct uci_option *o = uci_lookup_option(ctx, s, "bh_node");
+		struct uci_element *e;
+		size_t used = 0;
+
+		if (o && o->type == UCI_TYPE_LIST)
+			uci_foreach_element(&o->v.list, e) {
+				int n = snprintf(m->bh_nodes + used, sizeof(m->bh_nodes) - used,
+						 "%s%s", used ? "-" : "", e->name);
+
+				if (n < 0 || (size_t)n >= sizeof(m->bh_nodes) - used)
+					break;
+
+				used += (size_t)n;
+			}
+	}
 
 	list_add_tail(&m->list, &mesh_members);
 }

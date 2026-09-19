@@ -74,7 +74,6 @@ struct roam_config {
 	bool allow_kick;
 	bool deny_probe;
 	enum roam_prefer prefer;
-	char ssid[ROAMD_SSID_MAX];
 	char mobility_domain[ROAMD_MDID_LEN + 1];
 
 	int rssi_low;
@@ -164,8 +163,10 @@ enum roam_lock roam_device_lock(const uint8_t *addr);
 bool roam_device_node_allowed(const uint8_t *addr, const char *node_id);
 void roam_config_load(void);
 void roam_config_dump(struct blob_buf *b);
+bool roam_config_value(const char *name, char *out, size_t len);
 
 bool roam_uci_bool(const char *value);
+uint16_t roam_hash16(const char *s);
 
 struct uci_session {
 	struct uci_context *ctx;
@@ -180,11 +181,15 @@ struct uci_section *uci_session_find(struct uci_session *s, const char *type,
 struct uci_section *uci_session_add(struct uci_session *s, const char *type, const char *name);
 void uci_session_set(struct uci_session *s, const char *section,
 		     const char *option, const char *value);
+void uci_session_del_list(struct uci_session *s, const char *section,
+			  const char *option, const char *value);
 void uci_session_add_list(struct uci_session *s, const char *section,
 			  const char *option, const char *value);
 bool uci_session_delete(struct uci_session *s, const char *section, const char *option);
+const char *uci_option_any(struct uci_context *ctx, struct uci_section *s, const char *name);
 void uci_session_close(struct uci_session *s);
 void roam_wireless_apply(void);
+void roam_network_reload(void);
 
 extern const char *const roam_pair_issues[];
 void roam_pair_evaluate(void);
@@ -215,8 +220,13 @@ bool roam_policy_can_steer(const struct roam_sta *sta);
 
 void roam_ubus_object_init(void);
 
+struct mesh_pkg_meta;
 bool apk_index_print(const char *path);
+bool apk_index_meta(const char *path, const char *name, struct mesh_pkg_meta *out);
 bool apk_block_print(const char *path);
+bool apk_block_digest(const char *path, char *hex, size_t len);
+bool roam_sha256_file(const char *path, char *hex, size_t len);
+bool roam_sha256_data(const void *data, size_t size, char *hex, size_t len);
 
 #define roam_log(level, fmt, ...) do { \
 	if (config.log_level >= (level)) \

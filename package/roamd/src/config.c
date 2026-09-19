@@ -46,7 +46,6 @@ static const struct opt_desc opts[] = {
 	OPT("allow_kick", OPT_BOOL, allow_kick),
 	OPT("deny_probe", OPT_BOOL, deny_probe),
 	OPT("prefer_band", OPT_PREFER, prefer),
-	OPT("ssid", OPT_STR, ssid),
 	OPT("mobility_domain", OPT_STR, mobility_domain),
 	OPT("rssi_low", OPT_INT, rssi_low),
 	OPT("rssi_good", OPT_INT, rssi_good),
@@ -98,6 +97,26 @@ static void roam_config_init(void)
 	config.log_level = ROAM_L_INFO;
 }
 
+const char *uci_option_any(struct uci_context *ctx, struct uci_section *s, const char *name)
+{
+	struct uci_option *o = uci_lookup_option(ctx, s, name);
+	struct uci_element *e;
+
+	if (!o)
+		return NULL;
+
+	if (o->type == UCI_TYPE_STRING)
+		return o->v.string;
+
+	if (o->type != UCI_TYPE_LIST)
+		return NULL;
+
+	uci_foreach_element(&o->v.list, e)
+		return e->name;
+
+	return NULL;
+}
+
 bool roam_uci_bool(const char *value)
 {
 	if (!value)
@@ -105,6 +124,21 @@ bool roam_uci_bool(const char *value)
 
 	return !strcmp(value, "1") || !strcmp(value, "true") ||
 	       !strcmp(value, "yes") || !strcmp(value, "on");
+}
+
+uint16_t roam_hash16(const char *s)
+{
+	uint32_t hash = 2166136261u;
+	uint16_t out;
+
+	while (*s) {
+		hash ^= (uint8_t)*s++;
+		hash *= 16777619u;
+	}
+
+	out = (hash ^ (hash >> 16)) & 0xffff;
+
+	return (out == 0 || out == 0xffff) ? 0x4b52 : out;
 }
 
 static enum roam_prefer opt_to_prefer(const char *v)
@@ -245,36 +279,55 @@ static void device_load(struct uci_context *ctx, struct uci_section *s)
 		free(dev);
 }
 
+static void opt_value(const struct opt_desc *o, char *value, size_t len)
+{
+	const void *field = (const char *)&config + o->offset;
+
+	switch (o->type) {
+	case OPT_BOOL:
+		snprintf(value, len, "%u", *(const bool *)field);
+		break;
+	case OPT_INT:
+		snprintf(value, len, "%d", *(const int *)field);
+		break;
+	case OPT_U32:
+		snprintf(value, len, "%u", *(const uint32_t *)field);
+		break;
+	case OPT_STR:
+		snprintf(value, len, "%s", (const char *)field);
+		break;
+	case OPT_PREFER:
+		snprintf(value, len, "%s",
+			 *(const enum roam_prefer *)field == PREFER_HIGH ? "5" :
+			 *(const enum roam_prefer *)field == PREFER_LOW ? "2.4" : "none");
+		break;
+	}
+}
+
+bool roam_config_value(const char *name, char *out, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(opts); i++) {
+		if (strcmp(opts[i].name, name))
+			continue;
+
+		opt_value(&opts[i], out, len);
+
+		return true;
+	}
+
+	return false;
+}
+
 void roam_config_dump(struct blob_buf *b)
 {
 	char value[64];
 	size_t i;
 
 	for (i = 0; i < ARRAY_SIZE(opts); i++) {
-		const struct opt_desc *o = &opts[i];
-		const void *field = (const char *)&config + o->offset;
-
-		switch (o->type) {
-		case OPT_BOOL:
-			snprintf(value, sizeof(value), "%u", *(const bool *)field);
-			break;
-		case OPT_INT:
-			snprintf(value, sizeof(value), "%d", *(const int *)field);
-			break;
-		case OPT_U32:
-			snprintf(value, sizeof(value), "%u", *(const uint32_t *)field);
-			break;
-		case OPT_STR:
-			snprintf(value, sizeof(value), "%s", (const char *)field);
-			break;
-		case OPT_PREFER:
-			snprintf(value, sizeof(value), "%s",
-				 *(const enum roam_prefer *)field == PREFER_HIGH ? "5" :
-				 *(const enum roam_prefer *)field == PREFER_LOW ? "2.4" : "none");
-			break;
-		}
-
-		blobmsg_add_string(b, o->name, value);
+		opt_value(&opts[i], value, sizeof(value));
+		blobmsg_add_string(b, opts[i].name, value);
 	}
 }
 
@@ -391,6 +444,15 @@ void uci_session_add_list(struct uci_session *s, const char *section,
 		s->dirty = true;
 }
 
+void uci_session_del_list(struct uci_session *s, const char *section,
+			  const char *option, const char *value)
+{
+	if (uci_del_list(s->ctx, &(struct uci_ptr){
+		.package = s->name, .section = section,
+		.option = option, .value = value }) == UCI_OK)
+		s->dirty = true;
+}
+
 bool uci_session_delete(struct uci_session *s, const char *section, const char *option)
 {
 	struct uci_ptr ptr = { .package = s->name, .section = section, .option = option };
@@ -445,4 +507,5 @@ void roam_config_load(void)
 	}
 
 	config_sanitize();
+	mesh_networks_collect();
 }

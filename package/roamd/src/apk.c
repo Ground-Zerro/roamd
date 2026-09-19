@@ -4,6 +4,7 @@
 #include <endian.h>
 
 #include "roamd.h"
+#include "mesh.h"
 
 #define APK_FILE_MAX		(64 * 1024 * 1024)
 
@@ -529,14 +530,14 @@ static uint64_t adb_int(const struct adb *adb, uint32_t v)
 	}
 }
 
-bool apk_index_print(const char *path)
+static bool apk_index_walk(const char *path, const char *want, struct mesh_pkg_meta *out)
 {
 	size_t len, name_len = 0, ver_len = 0, hash_len = 0, j;
 	const uint8_t *name, *ver, *hash;
 	uint32_t packages, pkg, n, i;
 	struct adb adb;
 	uint8_t *raw;
-	bool ok;
+	bool ok, found = false;
 
 	raw = apk_file_inflate(path, &len);
 	if (!raw)
@@ -555,6 +556,23 @@ bool apk_index_print(const char *path)
 			if (!name || !ver || !hash)
 				continue;
 
+			if (want) {
+				if (strlen(want) != name_len || memcmp(want, name, name_len))
+					continue;
+
+				snprintf(out->version, sizeof(out->version), "%.*s",
+					 (int)ver_len, ver);
+				snprintf(out->file, sizeof(out->file), "%.*s-%.*s.apk",
+					 (int)name_len, name, (int)ver_len, ver);
+
+				for (j = 0; j < hash_len && j * 2 + 2 < sizeof(out->sum); j++)
+					snprintf(out->sum + j * 2, 3, "%02x", hash[j]);
+
+				out->adb = true;
+				found = true;
+				break;
+			}
+
 			printf("%.*s %.*s %llu ", (int)name_len, name, (int)ver_len, ver,
 			       (unsigned long long)adb_int(&adb, adb_field(&adb, pkg, ADBI_PI_FILE_SIZE)));
 			for (j = 0; j < hash_len; j++)
@@ -565,7 +583,19 @@ bool apk_index_print(const char *path)
 
 	free(raw);
 
-	return ok;
+	return want ? found : ok;
+}
+
+bool apk_index_print(const char *path)
+{
+	return apk_index_walk(path, NULL, NULL);
+}
+
+bool apk_index_meta(const char *path, const char *name, struct mesh_pkg_meta *out)
+{
+	memset(out, 0, sizeof(*out));
+
+	return apk_index_walk(path, name, out);
 }
 
 bool apk_block_print(const char *path)
@@ -581,6 +611,25 @@ bool apk_block_print(const char *path)
 
 	ok = adb_block(raw, len, ADB_SCHEMA_PACKAGE, &adb) &&
 	     fwrite(adb.ptr, 1, adb.len, stdout) == adb.len;
+
+	free(raw);
+
+	return ok;
+}
+
+bool apk_block_digest(const char *path, char *hex, size_t len)
+{
+	struct adb adb;
+	uint8_t *raw;
+	size_t size;
+	bool ok;
+
+	raw = apk_file_inflate(path, &size);
+	if (!raw)
+		return false;
+
+	ok = adb_block(raw, size, ADB_SCHEMA_PACKAGE, &adb) &&
+	     roam_sha256_data(adb.ptr, adb.len, hex, len);
 
 	free(raw);
 

@@ -1,0 +1,11 @@
+{
+	"admin/network/wireless": {
+		"depends": {
+			"acl": [ "luci-mod-network-config" ],
+			"uci": {
+				"wireless": { "@wifi-device": true },
+				"roamd": { "mesh": { "role": "controller" } }
+			}
+		}
+	}
+}
