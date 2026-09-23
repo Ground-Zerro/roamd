@@ -1,4 +1,5 @@
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -13,6 +14,10 @@
 
 #include "roamd.h"
 #include "mesh.h"
+
+#define MESH_FT_WATCH_INTERVAL	60000
+#define MESH_WPAD_INIT		"/etc/init.d/wpad"
+#define MESH_RRB_PROTO		"88b7"
 
 #define MESH_UBUS_TIMEOUT	500
 #define MESH_DEPS_FIRST		5000
@@ -237,6 +242,9 @@ static const struct mesh_field fields[] = {
 	MFIELD("backhaul_parents", MESH_STR, backhaul_parents),
 	MFIELD("bh_limits", MESH_STR, bh_limits),
 	MFIELD("ft_key", MESH_STR, ft_key),
+	MFIELD("ft_kh", MESH_STR, ft_kh),
+	MFIELD("ssh_pubkey", MESH_STR, ssh_pubkey[MESH_KEY_ED25519]),
+	MFIELD("ssh_pubkey_rsa", MESH_STR, ssh_pubkey[MESH_KEY_RSA]),
 	MFIELD("wifi_shutdown", MESH_BOOL, wifi_shutdown),
 	MFIELD("node_ui", MESH_BOOL, node_ui),
 	MFIELD("backhaul_delta", MESH_INT, backhaul_delta),
@@ -280,6 +288,59 @@ const char *mesh_self_node_id(void)
 	return "controller";
 }
 
+void mesh_ft_nasid(const char *node, uint8_t band, char *out, size_t len)
+{
+	snprintf(out, len, "%s-%s", node, band == MESH_BAND_5 ? "5" : "2");
+}
+
+bool mesh_chain_has(const char *chain, const char *id)
+{
+	size_t len = strlen(id);
+	const char *p = chain;
+
+	while (len && (p = strstr(p, id))) {
+		if ((p == chain || p[-1] == '-') && (p[len] == '\0' || p[len] == '-'))
+			return true;
+
+		p += len;
+	}
+
+	return false;
+}
+
+uint8_t mesh_band_bit(const char *name)
+{
+	if (!name || !name[0])
+		return 0;
+
+	return name[0] == '2' ? MESH_BAND_24 : MESH_BAND_5;
+}
+
+enum roam_band mesh_band_from_bit(uint8_t bit)
+{
+	return bit == MESH_BAND_5 ? BAND_HIGH : BAND_LOW;
+}
+
+static uint8_t local_band_mask(void)
+{
+	struct roam_bss *bss;
+	uint8_t mask = 0;
+
+	list_for_each_entry(bss, &roam_bss_list, list)
+		if (roam_bss_matches(bss))
+			mask |= roam_band_bit(bss->band);
+
+	return mask;
+}
+
+bool mesh_band_usable(uint8_t bit)
+{
+	if (!bit || mesh.role == MESH_NODE)
+		return true;
+
+	return (mesh.band_mask | local_band_mask()) & bit;
+}
+
 static const char *bss_nr_hex(struct blob_attr *nr)
 {
 	struct blob_attr *cur;
@@ -311,13 +372,17 @@ void mesh_aps_dump(struct blob_buf *b, const char *name)
 	void *arr = blobmsg_open_array(b, name);
 
 	list_for_each_entry(bss, &roam_bss_list, list) {
-		const char *nr = bss_nr_hex(bss->nr);
+		const char *nr;
 		char bssid[18];
-		void *e = blobmsg_open_table(b, NULL);
+		void *e;
 
-		snprintf(bssid, sizeof(bssid), "%02x:%02x:%02x:%02x:%02x:%02x",
-			 bss->bssid[0], bss->bssid[1], bss->bssid[2],
-			 bss->bssid[3], bss->bssid[4], bss->bssid[5]);
+		if (!bss->ssid[0])
+			continue;
+
+		nr = bss_nr_hex(bss->nr);
+		e = blobmsg_open_table(b, NULL);
+
+		roam_mac_str(bss->bssid, bssid, sizeof(bssid));
 
 		blobmsg_add_string(b, "ifname", bss->ifname);
 		blobmsg_add_string(b, "bssid", bssid);
@@ -430,9 +495,7 @@ static bool nbr_is_local(const char *bssid)
 	list_for_each_entry(bss, &roam_bss_list, list) {
 		char bs[18];
 
-		snprintf(bs, sizeof(bs), "%02x:%02x:%02x:%02x:%02x:%02x",
-			 bss->bssid[0], bss->bssid[1], bss->bssid[2],
-			 bss->bssid[3], bss->bssid[4], bss->bssid[5]);
+		roam_mac_str(bss->bssid, bs, sizeof(bs));
 		if (!strcasecmp(bs, bssid))
 			return true;
 	}
@@ -751,7 +814,6 @@ void mesh_member_load(struct uci_context *ctx, struct uci_section *s)
 	member_str(ctx, s, "hostname", m->hostname, sizeof(m->hostname));
 	member_str(ctx, s, "mac", m->mac, sizeof(m->mac));
 	member_str(ctx, s, "addr", m->addr, sizeof(m->addr));
-	member_str(ctx, s, "bh_band", m->bh_band, sizeof(m->bh_band));
 	m->managed = managed ? roam_uci_bool(managed) : true;
 
 	{
@@ -813,6 +875,56 @@ void mesh_config_apply(struct uci_context *ctx, struct uci_section *s)
 		snprintf(mesh.pkg_url, sizeof(mesh.pkg_url), "%s", MESH_PKG_URL_DEFAULT);
 }
 
+static struct uloop_timeout ft_watch;
+static struct mesh_task wpad_job;
+static bool ft_restarted;
+
+static bool rrb_orphaned(void)
+{
+	char line[256];
+	FILE *f = fopen("/proc/net/packet", "r");
+	bool found = false, bound = false;
+
+	if (!f)
+		return false;
+
+	while (fgets(line, sizeof(line), f)) {
+		char sk[32], proto[16];
+		unsigned int refcnt, type;
+		int iface;
+
+		if (sscanf(line, "%31s %u %u %15s %d", sk, &refcnt, &type, proto, &iface) != 5)
+			continue;
+
+		if (strcmp(proto, MESH_RRB_PROTO))
+			continue;
+
+		found = true;
+		if (iface > 0)
+			bound = true;
+	}
+
+	fclose(f);
+
+	return found && !bound;
+}
+
+static void ft_watch_cb(struct uloop_timeout *t)
+{
+	mesh_node_key_ensure();
+
+	if (!config.fast_transition || !rrb_orphaned())
+		ft_restarted = false;
+	else if (!ft_restarted) {
+		ft_restarted = true;
+		roam_log(ROAM_L_INFO,
+			 "mesh: key exchange socket lost its bridge, restarting wpad");
+		mesh_task_start(&wpad_job, MESH_RC_COMMON, MESH_WPAD_INIT, "restart");
+	}
+
+	uloop_timeout_set(t, MESH_FT_WATCH_INTERVAL);
+}
+
 void mesh_start(void)
 {
 	static bool log_loaded;
@@ -830,6 +942,9 @@ void mesh_start(void)
 
 	mesh_deps_start();
 
+	ft_watch.cb = ft_watch_cb;
+	uloop_timeout_set(&ft_watch, MESH_FT_WATCH_INTERVAL);
+
 	if (mesh.role == MESH_NODE) {
 		roam_log(ROAM_L_INFO, "mesh: node of controller %s (%s)",
 			 mesh.controller_id[0] ? mesh.controller_id : "?",
@@ -838,6 +953,7 @@ void mesh_start(void)
 		mesh_node_dumbap();
 	} else {
 		mesh_ctrl_ensure_id();
+		mesh_ssh_key_ensure();
 		roam_log(ROAM_L_INFO, "mesh: controller %s", mesh.controller_id);
 		mesh_ctrl_backhaul_apply();
 		mesh_ctrl_bridge_stp();

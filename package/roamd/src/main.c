@@ -95,14 +95,16 @@ int main(int argc, char **argv)
 		return mesh_deps_ensure(argc == 3 && !strcmp(argv[2], "need"));
 	}
 
-	if (argc == 4 && (!strcmp(argv[1], "acquire") || !strcmp(argv[1], "release"))) {
+	if (argc >= 4 && argc <= 5 &&
+	    (!strcmp(argv[1], "acquire") || !strcmp(argv[1], "release"))) {
 		int rc;
 
 		roam_config_load();
 		uloop_init();
 
 		if (!strcmp(argv[1], "acquire"))
-			rc = mesh_acquire_run(argv[2], argv[3]);
+			rc = mesh_acquire_run(argv[2], argv[3],
+					      argc < 5 || strcmp(argv[4], "keep"));
 		else
 			rc = mesh_release_run(argv[2], argv[3]);
 

@@ -35,7 +35,6 @@ struct mesh_member {
 	char hostname[MESH_NAME_MAX];
 	char mac[MESH_MAC_MAX];
 	char addr[MESH_ADDR_MAX];
-	char bh_band[4];
 	char bh_nodes[MESH_BH_ALLOW_LEN];
 	bool managed;
 };
@@ -47,7 +46,9 @@ enum mesh_event_type {
 	MESH_EV_DISCONNECT,
 	MESH_EV_ROAM,
 	MESH_EV_STEER,
-	MESH_EV_KICK
+	MESH_EV_KICK,
+	MESH_EV_DENY_NODE,
+	MESH_EV_DENY_BAND
 };
 
 struct mesh_event {
@@ -68,8 +69,13 @@ struct mesh_event {
 #define MESH_BH_DELTA_DEFAULT		20
 #define MESH_BH_MIN_SIGNAL_DEFAULT	-78
 #define MESH_BH_PARENT_MAX		24
+#define MESH_CONTROLLER_OWNER		"controller"
 #define MESH_BH_PARENTS_LEN		1024
 #define MESH_FT_KEY_HEX			64
+#define MESH_FT_KH_LEN			1536
+#define MESH_FT_KH_MAX			16
+#define MESH_PUBKEY_MAX			512
+#define MESH_NASID_MAX			(MESH_ID_MAX + 4)
 
 #define MESH_NET_MAX		8
 #define MESH_NET_ID_LEN		5
@@ -97,6 +103,15 @@ struct mesh_network {
 #define MESH_SEG_BRIDGE		"br-seg"
 #define MESH_SEG_PREFIX		"sg"
 
+enum mesh_key {
+	MESH_KEY_ED25519,
+	MESH_KEY_RSA,
+	__MESH_KEY_MAX
+};
+
+extern const char *const mesh_key_files[__MESH_KEY_MAX];
+extern const char *const mesh_key_fields[__MESH_KEY_MAX];
+
 struct mesh_config {
 	bool enabled;
 	enum mesh_role role;
@@ -107,6 +122,8 @@ struct mesh_config {
 	char backhaul_parents[MESH_BH_PARENTS_LEN];
 	char bh_limits[MESH_BH_LIMITS_LEN];
 	char ft_key[MESH_FT_KEY_HEX + 1];
+	char ft_kh[MESH_FT_KH_LEN];
+	char ssh_pubkey[__MESH_KEY_MAX][MESH_PUBKEY_MAX];
 	bool wifi_shutdown;
 	bool node_ui;
 	int backhaul_delta;
@@ -124,6 +141,7 @@ struct mesh_config {
 	char controller_mac[MESH_MAC_MAX];
 	char member_id[MESH_ID_MAX];
 	char networks_sum[MESH_NET_SUM_LEN];
+	uint8_t band_mask;
 };
 
 extern struct mesh_config mesh;
@@ -137,6 +155,12 @@ void mesh_start(void);
 
 const char *mesh_role_name(enum mesh_role role);
 const char *mesh_self_node_id(void);
+uint8_t mesh_band_bit(const char *name);
+void mesh_ft_nasid(const char *node, uint8_t band, char *out, size_t len);
+void mesh_node_key_ensure(void);
+uint8_t mesh_radio_band(struct uci_context *ctx, struct uci_package *pkg, const char *device);
+enum roam_band mesh_band_from_bit(uint8_t bit);
+bool mesh_band_usable(uint8_t bit);
 void mesh_aps_dump(struct blob_buf *b, const char *name);
 
 unsigned int mesh_networks_collect(void);
@@ -154,6 +178,8 @@ bool mesh_link_enslave(const char *parent, int vid, const char *name, const char
 bool mesh_bridge_wired_port(const char *bridge, char *out, size_t len);
 bool mesh_bridge_lan(char *out, size_t len);
 unsigned int mesh_bridge_ports(const char *bridge, char out[][IFNAMSIZ], unsigned int max);
+bool mesh_parent_reachable(const char *member_id, const char *nodes);
+bool mesh_chain_has(const char *chain, const char *id);
 
 typedef void (*mesh_rpc_cb)(void *priv, struct blob_attr *result, bool ok);
 
@@ -163,6 +189,10 @@ void mesh_rpc_forget(const char *id);
 
 #define MESH_PKG_MAIN	"roamd"
 #define MESH_PKG_UI	"luci-app-roamd"
+#define MESH_PKG_I18N	"luci-i18n-roamd-ru"
+#define MESH_PKG_COUNT	3
+
+extern const char *const mesh_pkg_names[MESH_PKG_COUNT];
 
 struct mesh_pkg_meta {
 	char file[MESH_NAME_MAX];
@@ -241,11 +271,11 @@ bool mesh_lease_reserve(const char *cidr, const char *mac, const char *id,
 void mesh_lease_drop(const char *id);
 void mesh_dnsmasq_reload(void);
 bool mesh_ssh_key_ensure(void);
-bool mesh_ssh_pubkey(char *out, size_t len);
+bool mesh_ssh_pubkey(enum mesh_key key, char *out, size_t len);
 bool mesh_node_wait_at(const char *addr, const char *mac, int seconds);
 void mesh_member_register(const char *id, const char *mac, const char *addr,
 			  const char *hostname, const char *label);
-int mesh_acquire_run(const char *addr, const char *task);
+int mesh_acquire_run(const char *addr, const char *task, bool reset);
 int mesh_release_run(const char *id, const char *task);
 int mesh_deps_ensure(bool need_only);
 bool mesh_pkg_probe(const char *url);
@@ -255,6 +285,7 @@ bool mesh_ubus_call(const char *method, const char *json);
 
 void mesh_poll_run(bool force);
 bool mesh_poll_busy(void);
+bool mesh_poll_has_place(const uint8_t *addr);
 
 void mesh_seg_links_sync(void);
 bool mesh_seg_node_apply(void);
@@ -301,13 +332,13 @@ struct mesh_uplink {
 
 bool mesh_bridge_port_of(const uint8_t *mac, struct mesh_uplink *out);
 void mesh_wired_collect(struct mesh_assoc_idx *idx, const uint8_t *parent);
-const char *mesh_bridge_member_behind(const uint8_t *mac);
 bool mesh_parent_mac(uint8_t *out);
 void mesh_bridge_wifi_cost(void);
 void mesh_bridge_stp_root(const char *bridge);
 bool mesh_bridge_root_is_self(const char *bridge);
 bool mesh_bridge_carrier(const char *ifname);
 bool mesh_bridge_sta_up(void);
+int mesh_bridge_sta_ifindex(void);
 bool mesh_bridge_sta_name(char *out, size_t len);
 
 #define MESH_DEPS_SCRIPT	"/usr/sbin/roamd"
@@ -321,6 +352,9 @@ struct mesh_task {
 
 pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2);
 #define MESH_RUN_DIR		"/var/run/roamd"
+#define MESH_RC_COMMON		"/etc/rc.common"
+#define MESH_TASK_MAX		8192
+#define MESH_ACQUIRE_DIR	"/var/run/roamd/acquire"
 
 void mesh_dir_ensure(const char *path);
 
@@ -358,7 +392,7 @@ enum mesh_job_kind {
 };
 
 void mesh_ctrl_job(enum mesh_job_kind kind, bool start, bool stop, struct blob_buf *b);
-void mesh_ctrl_acquire(const char *addr, struct blob_buf *b);
+void mesh_ctrl_acquire(const char *addr, bool reset, struct blob_buf *b);
 void mesh_ctrl_acquire_blob(struct blob_buf *b);
 bool mesh_ctrl_acquire_mac(uint8_t *out);
 void mesh_ctrl_update(const char *id, struct blob_buf *b);
@@ -373,13 +407,13 @@ void mesh_ctrl_backhaul_apply(void);
 void mesh_ctrl_bridge_stp(void);
 void mesh_member_live(const char *id, struct blob_buf *b);
 bool mesh_member_remove(const char *id);
-bool mesh_member_set(const char *id, const char *name, const char *band, const char *nodes);
+bool mesh_member_set(const char *id, const char *name, const char *nodes);
 
 bool mesh_node_apply(struct blob_attr *msg);
 void mesh_node_report(struct blob_buf *b);
 void mesh_self_info(struct blob_buf *b);
 void mesh_node_diag(struct blob_buf *b);
-bool mesh_node_steer(const char *macstr, struct blob_attr *neighbors);
+bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *neighbors);
 bool mesh_node_drop(const char *macstr);
 void mesh_node_touch(void);
 uint32_t mesh_node_contact_age(void);
@@ -388,7 +422,7 @@ void mesh_node_dumbap(void);
 bool mesh_icmp_ping(const char *addr, int timeout_ms);
 int mesh_net_apply(const char *bridge, const char *controller);
 
-void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band,
+void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band, const char *to_node,
 		    enum mesh_event_type type);
 void mesh_log_push(const struct mesh_event *ev);
 void mesh_log_dump(struct blob_buf *b, unsigned int limit);

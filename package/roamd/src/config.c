@@ -50,8 +50,8 @@ static const struct opt_desc opts[] = {
 	OPT("rssi_low", OPT_INT, rssi_low),
 	OPT("rssi_good", OPT_INT, rssi_good),
 	OPT("rssi_diff", OPT_INT, rssi_diff),
+	OPT("node_rssi_diff", OPT_INT, node_rssi_diff),
 	OPT("kick_rssi", OPT_INT, kick_rssi),
-	OPT("cross_band_delta", OPT_INT, cross_band_delta),
 	OPT("hold_time", OPT_U32, hold_time),
 	OPT("age_time", OPT_U32, age_time),
 	OPT("check_time_low", OPT_U32, check_time[BAND_LOW]),
@@ -83,8 +83,8 @@ static void roam_config_init(void)
 	config.rssi_low = -75;
 	config.rssi_good = -55;
 	config.rssi_diff = 30;
+	config.node_rssi_diff = 12;
 	config.kick_rssi = -82;
-	config.cross_band_delta = 8;
 
 	config.hold_time = 30000;
 	config.age_time = 90000;
@@ -200,12 +200,16 @@ enum roam_lock roam_device_lock(const uint8_t *addr)
 	return dev ? dev->lock : LOCK_NONE;
 }
 
-bool roam_device_node_allowed(const uint8_t *addr, const char *node_id)
+enum roam_band roam_locked_band(enum roam_lock lock)
 {
-	struct roam_device *dev = avl_find_element(&device_tree, addr, dev, avl);
+	return lock == LOCK_LOW ? BAND_LOW : BAND_HIGH;
+}
+
+static bool device_node_allowed(const struct roam_device *dev, const char *node_id)
+{
 	unsigned int i;
 
-	if (!dev || !dev->n_nodes)
+	if (!dev->n_nodes)
 		return true;
 
 	for (i = 0; i < dev->n_nodes; i++)
@@ -213,6 +217,23 @@ bool roam_device_node_allowed(const uint8_t *addr, const char *node_id)
 			return true;
 
 	return false;
+}
+
+enum roam_admit roam_admit(const uint8_t *addr, const char *node_id, enum roam_band band)
+{
+	const struct roam_device *dev = avl_find_element(&device_tree, addr, dev, avl);
+
+	if (!dev)
+		return ADMIT_OK;
+
+	if (!device_node_allowed(dev, node_id))
+		return ADMIT_DENY_NODE;
+
+	if (dev->lock == LOCK_NONE || band == roam_locked_band(dev->lock))
+		return ADMIT_OK;
+
+	return mesh_band_usable(roam_band_bit(roam_locked_band(dev->lock))) ?
+	       ADMIT_DENY_BAND : ADMIT_OK;
 }
 
 static enum roam_lock opt_to_lock(const char *v)
@@ -349,6 +370,8 @@ static void config_sanitize(void)
 		config.rssi_good = config.rssi_low + 10;
 	if (config.rssi_diff < 1)
 		config.rssi_diff = 1;
+	if (config.node_rssi_diff < 1)
+		config.node_rssi_diff = 1;
 	if (config.poll_interval < 500)
 		config.poll_interval = 500;
 	if (config.age_time < config.hold_time)

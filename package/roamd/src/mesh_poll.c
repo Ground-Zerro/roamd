@@ -17,12 +17,17 @@
 #define POLL_NODE_MAX	(MESH_ALLOW_MAX + 1)
 #define POLL_NR_MAX	160
 #define SELF_ID		"controller"
+#define POLL_WATCHDOG_TIMEOUT	29000
+#define POLL_MISS_LIMIT	2
+#define KH_BSSID_NONE		"00:00:00:00:00:00|"
 
 struct poll_sta {
+	uint8_t addr[6];
 	char mac[MESH_MAC_MAX];
 	char ssid[MESH_SSID_MAX];
 	int signal;
 	uint32_t connected;
+	uint8_t band;
 	bool client;
 };
 
@@ -39,24 +44,68 @@ struct poll_node {
 	char name[MESH_NAME_MAX];
 	bool managed;
 	bool online;
+	bool answered;
+	unsigned int misses;
 	struct poll_sta sta[POLL_STA_MAX];
 	unsigned int n_sta;
 	struct poll_ap ap[POLL_AP_MAX];
 	unsigned int n_ap;
 };
 
+struct poll_call {
+	unsigned int gen;
+	struct poll_node *node;
+};
+
+struct sta_ref {
+	uint8_t node;
+	uint8_t sta;
+};
+
 static struct poll_node nodes[POLL_NODE_MAX];
 static unsigned int n_nodes;
+static struct sta_ref refs[POLL_NODE_MAX * POLL_STA_MAX];
+static unsigned int n_refs;
 static unsigned int waiting;
+static unsigned int poll_gen;
 static bool busy;
 static bool force_pending;
 static bool force_apply;
 static char *profile_json;
 static char profile_sum[MESH_NET_SUM_LEN];
+static void poll_watchdog_cb(struct uloop_timeout *t);
+static struct uloop_timeout poll_watchdog = { .cb = poll_watchdog_cb };
 
 bool mesh_poll_busy(void)
 {
 	return busy;
+}
+
+bool mesh_poll_has_place(const uint8_t *addr)
+{
+	unsigned int i, j;
+
+	if (!n_nodes)
+		return true;
+
+	for (i = 0; i < n_nodes; i++) {
+		const struct poll_node *n = &nodes[i];
+
+		if (!n->online)
+			continue;
+
+		for (j = 0; j < n->n_ap; j++) {
+			uint8_t bit = mesh_band_bit(n->ap[j].band);
+
+			if (mesh.backhaul_ssid[0] && !strcmp(n->ap[j].ssid, mesh.backhaul_ssid))
+				continue;
+
+			if (roam_admit(addr, n->id, mesh_band_from_bit(bit)) == ADMIT_OK)
+				return true;
+		}
+	}
+
+	return false;
 }
 
 static const char *attr_str(struct blob_attr *table, const char *name)
@@ -127,6 +176,7 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 
 	blobmsg_for_each_attr(cur, list, rem) {
 		struct poll_sta *s;
+		struct ether_addr *ea;
 		const char *mac, *ssid;
 
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE || n->n_sta >= POLL_STA_MAX)
@@ -136,14 +186,20 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 		if (!mac || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
 			continue;
 
+		ea = ether_aton(mac);
+		if (!ea)
+			continue;
+
 		s = &n->sta[n->n_sta++];
 		memset(s, 0, sizeof(*s));
+		memcpy(s->addr, ea->ether_addr_octet, sizeof(s->addr));
 		snprintf(s->mac, sizeof(s->mac), "%s", mac);
 		ssid = attr_str(cur, "ssid");
 		if (ssid)
 			snprintf(s->ssid, sizeof(s->ssid), "%s", ssid);
 		s->signal = (int)attr_u32(cur, "signal");
 		s->connected = client ? attr_u32(cur, "connected") : 0;
+		s->band = mesh_band_bit(attr_str(cur, "band"));
 		s->client = client;
 	}
 }
@@ -277,30 +333,182 @@ static bool member_update_available(struct blob_attr *report)
 
 static void steer_round(void);
 
+static void bands_refresh(void)
+{
+	uint8_t mask = 0;
+	unsigned int i, j;
+
+	for (i = 0; i < n_nodes; i++)
+		for (j = 0; j < nodes[i].n_ap; j++) {
+			const struct poll_ap *a = &nodes[i].ap[j];
+
+			if (mesh.backhaul_ssid[0] && !strcmp(a->ssid, mesh.backhaul_ssid))
+				continue;
+
+			mask |= mesh_band_bit(a->band);
+		}
+
+	mesh.band_mask = mask;
+}
+
+static int kh_cmp(const void *a, const void *b)
+{
+	return strcmp(a, b);
+}
+
+static bool kh_owner_member(const char *nasid)
+{
+	const char *dash = strrchr(nasid, '-');
+	size_t len = dash ? (size_t)(dash - nasid) : strlen(nasid);
+	struct mesh_member *m;
+
+	if (!strncmp(nasid, SELF_ID, len) && !SELF_ID[len])
+		return true;
+
+	list_for_each_entry(m, &mesh_members, list)
+		if (!strncmp(m->id, nasid, len) && !m->id[len])
+			return true;
+
+	return false;
+}
+
+static bool kh_bssid_listed(char entries[][MESH_MAC_MAX + MESH_NASID_MAX + 2],
+			    unsigned int count, const char *tok)
+{
+	size_t len = strcspn(tok, "|");
+	unsigned int i;
+
+	for (i = 0; i < count; i++)
+		if (!strncasecmp(entries[i], tok, len) && entries[i][len] == '|')
+			return true;
+
+	return false;
+}
+
+static void ft_kh_refresh(void)
+{
+	char entries[MESH_FT_KH_MAX][MESH_MAC_MAX + MESH_NASID_MAX + 2];
+	char list[MESH_FT_KH_LEN], kept[MESH_FT_KH_LEN];
+	struct uci_session u;
+	unsigned int count = 0, i, j;
+	char *tok, *save = NULL;
+	size_t used = 0;
+
+	for (i = 0; i < n_nodes; i++) {
+		const struct poll_node *n = &nodes[i];
+
+		if (!n->online)
+			continue;
+
+		for (j = 0; j < n->n_ap && count < MESH_FT_KH_MAX; j++) {
+			const struct poll_ap *a = &n->ap[j];
+			char nasid[MESH_NASID_MAX];
+			uint8_t bit = mesh_band_bit(a->band);
+
+			if (!a->bssid[0] || !bit)
+				continue;
+
+			if (mesh.backhaul_ssid[0] && !strcmp(a->ssid, mesh.backhaul_ssid))
+				continue;
+
+			mesh_ft_nasid(n->id, bit, nasid, sizeof(nasid));
+			snprintf(entries[count++], sizeof(entries[0]), "%s|%s", a->bssid, nasid);
+		}
+	}
+
+	snprintf(kept, sizeof(kept), "%s", mesh.ft_kh);
+
+	for (tok = strtok_r(kept, " ", &save); tok && count < MESH_FT_KH_MAX;
+	     tok = strtok_r(NULL, " ", &save)) {
+		const char *nasid = strchr(tok, '|');
+
+		if (!nasid || !strncmp(tok, KH_BSSID_NONE, strlen(KH_BSSID_NONE)) ||
+		    !kh_owner_member(nasid + 1) || kh_bssid_listed(entries, count, tok))
+			continue;
+
+		snprintf(entries[count++], sizeof(entries[0]), "%s", tok);
+	}
+
+	qsort(entries, count, sizeof(entries[0]), kh_cmp);
+
+	list[0] = '\0';
+
+	for (i = 0; i < count; i++) {
+		int len = snprintf(list + used, sizeof(list) - used, "%s%s",
+				   used ? " " : "", entries[i]);
+
+		if (len < 0 || (size_t)len >= sizeof(list) - used)
+			break;
+
+		used += len;
+	}
+
+	if (!strcmp(mesh.ft_kh, list))
+		return;
+
+	snprintf(mesh.ft_kh, sizeof(mesh.ft_kh), "%s", list);
+
+	if (uci_session_open(&u, "roamd")) {
+		uci_session_add(&u, "mesh", "mesh");
+		uci_session_set(&u, "mesh", "ft_kh", list);
+		uci_session_close(&u);
+	}
+
+	roam_wireless_apply();
+}
+
 static void poll_finish(void)
 {
 	if (--waiting)
 		return;
 
+	uloop_timeout_cancel(&poll_watchdog);
+	bands_refresh();
+	ft_kh_refresh();
 	steer_round();
 	busy = false;
 }
 
-static void report_cb(void *priv, struct blob_attr *result, bool ok)
+static void node_missed(struct poll_node *n)
 {
-	struct poll_node *n = priv;
+	if (++n->misses >= POLL_MISS_LIMIT)
+		member_file_write(n, NULL, NULL, NULL, false);
+}
+
+static void poll_watchdog_cb(struct uloop_timeout *t)
+{
+	unsigned int i;
+
+	roam_log(ROAM_L_ERR, "mesh: %u nodes did not answer in %d s, marked offline",
+		 waiting, POLL_WATCHDOG_TIMEOUT / 1000);
+
+	poll_gen++;
+
+	for (i = 1; i < n_nodes; i++)
+		if (!nodes[i].answered)
+			node_missed(&nodes[i]);
+
+	waiting = 1;
+	poll_finish();
+}
+
+static void node_report(struct poll_node *n, struct blob_attr *result)
+{
 	struct blob_attr *profile;
 	const char *nets, *bh;
 	const char *issue = NULL;
 	const char *cons = "ok";
 
-	if (!ok || !result) {
-		member_file_write(n, NULL, NULL, NULL, false);
+	n->answered = true;
+
+	if (!result) {
+		node_missed(n);
 		poll_finish();
 
 		return;
 	}
 
+	n->misses = 0;
 	n->online = true;
 	sta_collect(n, attr_field(result, "clients", BLOBMSG_TYPE_ARRAY), true);
 	sta_collect(n, attr_field(result, "heard", BLOBMSG_TYPE_ARRAY), false);
@@ -330,12 +538,34 @@ static void report_cb(void *priv, struct blob_attr *result, bool ok)
 	poll_finish();
 }
 
+static struct poll_node *call_node(const struct poll_call *c)
+{
+	return c->gen == poll_gen ? c->node : NULL;
+}
+
+static void report_cb(void *priv, struct blob_attr *result, bool ok)
+{
+	struct poll_call *c = priv;
+	struct poll_node *n = call_node(c);
+
+	free(c);
+
+	if (n)
+		node_report(n, ok ? result : NULL);
+}
+
 static void apply_cb(void *priv, struct blob_attr *result, bool ok)
 {
-	struct poll_node *n = priv;
+	struct poll_call *c = priv;
+	struct poll_node *n = call_node(c);
 
-	if (!mesh_rpc_call(n->id, n->addr, "roamd", "mesh_report", NULL, report_cb, n))
-		report_cb(n, NULL, false);
+	if (!n) {
+		free(c);
+		return;
+	}
+
+	if (!mesh_rpc_call(n->id, n->addr, "roamd", "mesh_report", NULL, report_cb, c))
+		report_cb(c, NULL, false);
 }
 
 static void self_collect(void)
@@ -380,8 +610,22 @@ static bool profile_build(void)
 	return changed;
 }
 
+static unsigned int misses_of(const char *id, char ids[][MESH_ID_MAX],
+			      const unsigned int *counts, unsigned int n)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		if (!strcmp(ids[i], id))
+			return counts[i];
+
+	return 0;
+}
+
 void mesh_poll_run(bool force)
 {
+	char prev_ids[POLL_NODE_MAX][MESH_ID_MAX];
+	unsigned int prev_misses[POLL_NODE_MAX], n_prev, i;
 	struct mesh_member *m;
 
 	if (mesh.role != MESH_CONTROLLER || list_empty(&mesh_members))
@@ -402,13 +646,22 @@ void mesh_poll_run(bool force)
 		force = true;
 
 	force_apply = force;
+
+	for (i = 0; i < n_nodes; i++) {
+		memcpy(prev_ids[i], nodes[i].id, sizeof(prev_ids[i]));
+		prev_misses[i] = nodes[i].misses;
+	}
+	n_prev = n_nodes;
+
 	self_collect();
 	n_nodes = 1;
 	waiting = 1;
 	busy = true;
+	uloop_timeout_set(&poll_watchdog, POLL_WATCHDOG_TIMEOUT);
 
 	list_for_each_entry(m, &mesh_members, list) {
 		struct poll_node *n;
+		struct poll_call *c;
 		char state[MESH_WORD_MAX];
 		bool was_online, was_ok, apply;
 
@@ -421,6 +674,7 @@ void mesh_poll_run(bool force)
 		snprintf(n->addr, sizeof(n->addr), "%s", m->addr);
 		snprintf(n->name, sizeof(n->name), "%s", m->name);
 		n->managed = m->managed;
+		n->misses = misses_of(m->id, prev_ids, prev_misses, n_prev);
 
 		was_online = mesh_member_state(m->id, "online", state, sizeof(state)) &&
 			     !strcmp(state, "true");
@@ -430,12 +684,21 @@ void mesh_poll_run(bool force)
 
 		waiting++;
 
+		c = malloc(sizeof(*c));
+		if (!c) {
+			node_report(n, NULL);
+			continue;
+		}
+
+		c->gen = poll_gen;
+		c->node = n;
+
 		if (apply && profile_json &&
-		    mesh_rpc_call(n->id, n->addr, "roamd", "mesh_apply", profile_json, apply_cb, n))
+		    mesh_rpc_call(n->id, n->addr, "roamd", "mesh_apply", profile_json, apply_cb, c))
 			continue;
 
-		if (!mesh_rpc_call(n->id, n->addr, "roamd", "mesh_report", NULL, report_cb, n))
-			report_cb(n, NULL, false);
+		if (!mesh_rpc_call(n->id, n->addr, "roamd", "mesh_report", NULL, report_cb, c))
+			report_cb(c, NULL, false);
 	}
 
 	poll_finish();
@@ -448,12 +711,12 @@ static bool net_roaming(const char *ssid)
 	return !net || net->roaming;
 }
 
-static bool node_has_net(const struct poll_node *n, const char *ssid)
+static bool node_has_net(const struct poll_node *n, const char *ssid, uint8_t band)
 {
 	unsigned int i;
 
 	for (i = 0; i < n->n_ap; i++)
-		if (!strcmp(n->ap[i].ssid, ssid))
+		if (!strcmp(n->ap[i].ssid, ssid) && mesh_band_bit(n->ap[i].band) == band)
 			return true;
 
 	return false;
@@ -462,18 +725,11 @@ static bool node_has_net(const struct poll_node *n, const char *ssid)
 static void member_call(const struct poll_node *n, const char *method, const char *args)
 {
 	if (!strcmp(n->id, SELF_ID)) {
-		uint32_t id;
+		static struct blob_buf b;
 
-		if (ubus_lookup_id(ubus_ctx, "roamd", &id))
-			return;
-
-		{
-			static struct blob_buf b;
-
-			blob_buf_init(&b, 0);
-			if (args && blobmsg_add_json_from_string(&b, args))
-				ubus_invoke(ubus_ctx, id, method, b.head, NULL, NULL, 1000);
-		}
+		blob_buf_init(&b, 0);
+		if (args && blobmsg_add_json_from_string(&b, args))
+			roam_ubus_call_local(method, b.head);
 
 		return;
 	}
@@ -481,41 +737,72 @@ static void member_call(const struct poll_node *n, const char *method, const cha
 	mesh_rpc_call(n->id, n->addr, "roamd", method, args, NULL, NULL);
 }
 
-static void ghosts_drop(void)
+static struct poll_sta *ref_sta(const struct sta_ref *r)
 {
-	unsigned int i, j, k, l;
+	return &nodes[r->node].sta[r->sta];
+}
+
+static int ref_cmp(const void *a, const void *b)
+{
+	const struct sta_ref *ra = a, *rb = b;
+	int diff = memcmp(ref_sta(ra)->addr, ref_sta(rb)->addr, 6);
+
+	if (diff)
+		return diff;
+
+	if (ra->node != rb->node)
+		return ra->node - rb->node;
+
+	return ra->sta - rb->sta;
+}
+
+static void refs_build(void)
+{
+	unsigned int i, j;
+
+	n_refs = 0;
 
 	for (i = 0; i < n_nodes; i++)
-		for (j = 0; j < nodes[i].n_sta; j++) {
-			struct poll_sta *s = &nodes[i].sta[j];
-			uint32_t oldest = s->connected;
+		for (j = 0; j < nodes[i].n_sta; j++)
+			refs[n_refs++] = (struct sta_ref){ .node = i, .sta = j };
 
-			if (!s->client || !s->connected)
-				continue;
+	qsort(refs, n_refs, sizeof(refs[0]), ref_cmp);
+}
 
-			for (k = 0; k < n_nodes; k++)
-				for (l = 0; l < nodes[k].n_sta; l++) {
-					struct poll_sta *o = &nodes[k].sta[l];
+static unsigned int group_end(unsigned int start)
+{
+	const uint8_t *addr = ref_sta(&refs[start])->addr;
+	unsigned int end = start + 1;
 
-					if (!o->client || !o->connected ||
-					    strcasecmp(o->mac, s->mac))
-						continue;
+	while (end < n_refs && !memcmp(ref_sta(&refs[end])->addr, addr, 6))
+		end++;
 
-					if (o->connected < oldest)
-						oldest = o->connected;
-				}
+	return end;
+}
 
-			if (s->connected == oldest)
-				continue;
+static void ghosts_drop(unsigned int from, unsigned int to)
+{
+	uint32_t oldest = 0;
+	unsigned int k;
 
-			{
-				char args[64];
+	for (k = from; k < to; k++) {
+		const struct poll_sta *s = ref_sta(&refs[k]);
 
-				snprintf(args, sizeof(args), "{\"mac\":\"%s\"}", s->mac);
-				member_call(&nodes[i], "mesh_drop", args);
-				s->connected = 0;
-			}
-		}
+		if (s->client && s->connected && (!oldest || s->connected < oldest))
+			oldest = s->connected;
+	}
+
+	for (k = from; k < to; k++) {
+		struct poll_sta *s = ref_sta(&refs[k]);
+		char args[64];
+
+		if (!s->client || !s->connected || s->connected == oldest)
+			continue;
+
+		snprintf(args, sizeof(args), "{\"mac\":\"%s\"}", s->mac);
+		member_call(&nodes[refs[k].node], "mesh_drop", args);
+		s->connected = 0;
+	}
 }
 
 static void neighbors_push(void)
@@ -560,21 +847,23 @@ static void neighbors_push(void)
 	free(json);
 }
 
-static unsigned int neighbor_list(const struct poll_node *best, const char *ssid,
-				  bool prefer_only, char *out, size_t len)
+static unsigned int neighbor_list(const struct poll_node *best, const uint8_t *addr,
+				  const char *ssid, uint8_t band, char *out, size_t len)
 {
 	unsigned int i, count = 0;
 	size_t used = 0;
 
 	for (i = 0; i < best->n_ap; i++) {
 		const struct poll_ap *a = &best->ap[i];
-		const char *want = config.prefer == PREFER_HIGH ? "5" : "2.4";
+		uint8_t bit = mesh_band_bit(a->band);
 
 		if (!a->nr[0] || strcmp(a->ssid, ssid))
 			continue;
 
-		if (prefer_only && config.prefer != PREFER_NONE && a->band[0] &&
-		    strcmp(a->band, want))
+		if (band && bit != band)
+			continue;
+
+		if (roam_admit(addr, best->id, mesh_band_from_bit(bit)) != ADMIT_OK)
 			continue;
 
 		if (used + strlen(a->nr) + 4 >= len)
@@ -587,74 +876,79 @@ static unsigned int neighbor_list(const struct poll_node *best, const char *ssid
 	return count;
 }
 
-static void steer_client(const char *mac, const char *ssid, unsigned int home)
+static void steer_client(unsigned int from, unsigned int to, unsigned int client)
 {
+	const struct poll_sta *c = ref_sta(&refs[client]);
+	const char *mac = c->mac, *ssid = c->ssid;
+	unsigned int home = refs[client].node, k;
+	uint8_t band = c->band;
+	enum roam_band rb = mesh_band_from_bit(band);
 	const struct poll_node *best = NULL;
 	int best_signal = 0, home_signal = 0;
-	struct ether_addr *ea = ether_aton(mac);
 	char args[1024], list[768];
-	unsigned int i, j;
 
-	if (!ea || !net_roaming(ssid))
+	if (!net_roaming(ssid))
 		return;
 
-	for (i = 0; i < n_nodes; i++) {
-		const struct poll_node *n = &nodes[i];
+	for (k = from; k < to; k++) {
+		const struct poll_sta *s = ref_sta(&refs[k]);
+		const struct poll_node *n = &nodes[refs[k].node];
 
-		if (!n->online || !node_has_net(n, ssid) ||
-		    !roam_device_node_allowed((uint8_t *)ea, n->id))
+		if (s->band != band || !n->online || !node_has_net(n, ssid, band) ||
+		    roam_admit(c->addr, n->id, rb) != ADMIT_OK)
 			continue;
 
-		for (j = 0; j < n->n_sta; j++) {
-			const struct poll_sta *s = &n->sta[j];
-
-			if (strcasecmp(s->mac, mac))
-				continue;
-
-			if (!best || s->signal > best_signal) {
-				best = n;
-				best_signal = s->signal;
-			}
-
-			if (i == home)
-				home_signal = s->signal;
+		if (!best || s->signal > best_signal) {
+			best = n;
+			best_signal = s->signal;
 		}
+
+		if (refs[k].node == home)
+			home_signal = s->signal;
 	}
 
 	if (!best || best == &nodes[home])
 		return;
 
-	if (roam_device_node_allowed((uint8_t *)ea, nodes[home].id) &&
-	    best_signal - home_signal < config.rssi_diff)
+	if (roam_admit(c->addr, nodes[home].id, rb) == ADMIT_OK &&
+	    best_signal - home_signal < config.node_rssi_diff)
 		return;
 
 	list[0] = 0;
-	if (!neighbor_list(best, ssid, true, list, sizeof(list)))
-		neighbor_list(best, ssid, false, list, sizeof(list));
+	if (!neighbor_list(best, c->addr, ssid, band, list, sizeof(list)))
+		neighbor_list(best, c->addr, ssid, 0, list, sizeof(list));
 
 	if (list[0])
-		snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"neighbors\":[%s]}", mac, list);
+		snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"id\":\"%s\",\"neighbors\":[%s]}",
+			 mac, best->id, list);
 	else
-		snprintf(args, sizeof(args), "{\"mac\":\"%s\"}", mac);
+		snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"id\":\"%s\"}", mac, best->id);
+
+	roam_log(ROAM_L_INFO,
+		 "mesh: %s is heard better on %s (%s GHz, %d dBm) than on %s (%d dBm), moving",
+		 mac, best->id, roam_band_name(rb), best_signal,
+		 nodes[home].id, home_signal);
 
 	member_call(&nodes[home], "mesh_steer", args);
 }
 
 static void steer_round(void)
 {
-	unsigned int i, j;
+	unsigned int start, end, k;
 
-	ghosts_drop();
+	refs_build();
 
-	for (i = 0; i < n_nodes; i++)
-		for (j = 0; j < nodes[i].n_sta; j++) {
-			const struct poll_sta *s = &nodes[i].sta[j];
+	for (start = 0; start < n_refs; start = end) {
+		end = group_end(start);
+		ghosts_drop(start, end);
 
-			if (!s->client || !s->ssid[0])
-				continue;
+		for (k = start; k < end; k++) {
+			const struct poll_sta *s = ref_sta(&refs[k]);
 
-			steer_client(s->mac, s->ssid, i);
+			if (s->client && s->ssid[0] && s->band)
+				steer_client(start, end, k);
 		}
+	}
 
 	neighbors_push();
 }

@@ -38,6 +38,8 @@ static const char *const type_name[] = {
 	[MESH_EV_ROAM] = "roam",
 	[MESH_EV_STEER] = "steer",
 	[MESH_EV_KICK] = "kick",
+	[MESH_EV_DENY_NODE] = "deny-node",
+	[MESH_EV_DENY_BAND] = "deny-band",
 };
 
 const char *mesh_event_type_name(enum mesh_event_type t)
@@ -282,7 +284,7 @@ void mesh_log_load(void)
 	mesh_log_flush();
 }
 
-void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band,
+void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band, const char *to_node,
 		    enum mesh_event_type type)
 {
 	struct mesh_event ev;
@@ -291,7 +293,7 @@ void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band,
 	memset(&ev, 0, sizeof(ev));
 	strncpy(ev.mac, mac, sizeof(ev.mac) - 1);
 	strncpy(ev.from_node, node, sizeof(ev.from_node) - 1);
-	strncpy(ev.to_node, node, sizeof(ev.to_node) - 1);
+	strncpy(ev.to_node, to_node && to_node[0] ? to_node : node, sizeof(ev.to_node) - 1);
 	ev.from_band = from_band;
 	ev.to_band = to_band;
 	ev.type = type;

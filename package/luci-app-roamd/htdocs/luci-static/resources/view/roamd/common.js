@@ -26,9 +26,34 @@ function stripDomain(name) {
 	return name;
 }
 
+function note(text, color) {
+	if (!text)
+		return '';
+
+	return E('div', {}, E('small', { 'style': 'color:%s'.format(color || '#888') }, text));
+}
+
+function twoLine(main, sub) {
+	return E('div', {}, [ main, note(sub) ]);
+}
+
 return baseclass.extend({
-	meshStatus: function() {
-		return callMeshStatus().catch(function() { return {}; });
+	meshStatus: callMeshStatus,
+	note: note,
+	twoLine: twoLine,
+
+	bandLabel: function(band) {
+		return '%s %s'.format(band, _('GHz'));
+	},
+
+	dialogFooter: function(actions, buttons) {
+		return E('div', {
+			'style': 'display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.5em;margin-top:1em'
+		}, [ E('div', {}, actions), E('div', {}, buttons) ]);
+	},
+
+	macCell: function(name, mac) {
+		return name ? twoLine(E('strong', {}, name), mac) : E('strong', {}, mac || '');
 	},
 
 	hostHints: function() {

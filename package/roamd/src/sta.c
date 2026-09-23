@@ -20,6 +20,12 @@ void roam_time_update(void)
 	roam_now = (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+void roam_mac_str(const uint8_t *raw, char *out, size_t len)
+{
+	snprintf(out, len, "%02x:%02x:%02x:%02x:%02x:%02x",
+		 raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]);
+}
+
 static int sta_cmp(const void *k1, const void *k2, void *ptr)
 {
 	return memcmp(k1, k2, 6);
@@ -43,8 +49,7 @@ struct roam_sta *roam_sta_get(const uint8_t *addr, bool create)
 		return NULL;
 
 	memcpy(sta->addr, addr, 6);
-	snprintf(sta->mac, sizeof(sta->mac), "%02x:%02x:%02x:%02x:%02x:%02x",
-		 addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+	roam_mac_str(addr, sta->mac, sizeof(sta->mac));
 
 	sta->avl.key = sta->addr;
 
@@ -118,9 +123,9 @@ void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int sign
 		struct roam_bss *prev = sta->bss;
 
 		if (prev)
-			mesh_log_local(sta->mac, prev->band, bss->band, MESH_EV_ROAM);
+			mesh_log_local(sta->mac, prev->band, bss->band, NULL, MESH_EV_ROAM);
 		else
-			mesh_log_local(sta->mac, MESH_BAND_NA, bss->band, MESH_EV_CONNECT);
+			mesh_log_local(sta->mac, MESH_BAND_NA, bss->band, NULL, MESH_EV_CONNECT);
 
 		if (prev && prev->band != bss->band) {
 			if (sta->last_steer && bss->band == sta->steer_from &&
@@ -146,6 +151,28 @@ void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int sign
 	sta_band_seen(sta, bss->band, signal);
 }
 
+int roam_sta_signal_seen(const struct roam_sta *sta, enum roam_band band, uint32_t *age)
+{
+	const struct roam_sta_band *info = &sta->band[band];
+
+	if (!info->present || info->signal == ROAMD_NO_SIGNAL)
+		return ROAMD_NO_SIGNAL;
+
+	*age = (uint32_t)((roam_now - info->seen) / 1000);
+
+	return info->signal;
+}
+
+int roam_sta_signal(const struct roam_sta *sta, enum roam_band band)
+{
+	const struct roam_sta_band *info = &sta->band[band];
+
+	if (!info->present || info->signal == ROAMD_NO_SIGNAL)
+		return ROAMD_NO_SIGNAL;
+
+	return roam_now - info->seen > config.age_time ? ROAMD_NO_SIGNAL : info->signal;
+}
+
 void roam_sta_reset(struct roam_sta *sta)
 {
 	sta->bss = NULL;
@@ -155,7 +182,7 @@ void roam_sta_reset(struct roam_sta *sta)
 void roam_sta_disconnected(struct roam_sta *sta)
 {
 	if (sta->bss)
-		mesh_log_local(sta->mac, sta->bss->band, MESH_BAND_NA, MESH_EV_DISCONNECT);
+		mesh_log_local(sta->mac, sta->bss->band, MESH_BAND_NA, NULL, MESH_EV_DISCONNECT);
 
 	roam_sta_reset(sta);
 }

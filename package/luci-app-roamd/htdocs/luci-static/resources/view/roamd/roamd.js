@@ -20,15 +20,7 @@ var statusData = {};
 var hostHints = {};
 
 function clientCell(mac) {
-	var name = common.clientLabel(hostHints, common.deviceOverrides(), mac);
-
-	if (!name)
-		return E('strong', {}, mac);
-
-	return E('div', {}, [
-		E('div', {}, E('strong', {}, name)),
-		E('div', {}, E('small', { 'style': 'color:#888' }, mac))
-	]);
+	return common.macCell(common.clientLabel(hostHints, common.deviceOverrides(), mac), mac);
 }
 
 function toSigned(value) {
@@ -42,10 +34,6 @@ function formatSignal(value) {
 	var dbm = toSigned(value);
 
 	return dbm ? '%d dBm'.format(dbm) : '-';
-}
-
-function bandLabel(band) {
-	return '%s %s'.format(band, _('GHz'));
 }
 
 var PAIR_TEXT = {
@@ -85,15 +73,6 @@ function roamingCell(iface) {
 	return E('span', {}, lines);
 }
 
-function lockLabel(lock) {
-	if (lock === '2.4')
-		return _('only 2.4 GHz');
-	if (lock === '5')
-		return _('only 5 GHz');
-
-	return _('both bands');
-}
-
 function eachClient(callback) {
 	var ifaces = statusData.interfaces || {};
 
@@ -115,7 +94,7 @@ function renderInterfaces() {
 		rows.push([
 			name,
 			i.ssid || '-',
-			bandLabel(i.band),
+			common.bandLabel(i.band),
 			i.channel || '-',
 			i.active ? _('running') : _('down'),
 			roamingCell(i)
@@ -147,16 +126,15 @@ function renderClients() {
 
 		for (var b in bands) {
 			if (bands[b].seen)
-				perBand.push('%s: %s'.format(bandLabel(b), formatSignal(bands[b].signal)));
+				perBand.push('%s: %s'.format(common.bandLabel(b), formatSignal(bands[b].signal)));
 		}
 
 		rows.push([
 			clientCell(mac),
-			'%s (%s)'.format(ifname, bandLabel(iface.band)),
+			'%s (%s)'.format(ifname, common.bandLabel(iface.band)),
 			formatSignal(client.signal),
 			'%t'.format(client.connected || 0),
 			perBand.length ? perBand.join(', ') : E('em', {}, _('unknown')),
-			lockLabel(client.band_lock),
 			client.btm ? _('yes') : _('no'),
 			client.rrm ? _('yes') : _('no'),
 			String(client.steer_count || 0)
@@ -170,7 +148,6 @@ function renderClients() {
 			E('th', { 'class': 'th' }, _('Signal')),
 			E('th', { 'class': 'th' }, _('Uptime')),
 			E('th', { 'class': 'th' }, _('Signal per band')),
-			E('th', { 'class': 'th' }, _('Allowed band')),
 			E('th', { 'class': 'th' }, '802.11v'),
 			E('th', { 'class': 'th' }, '802.11k'),
 			E('th', { 'class': 'th' }, _('Steering attempts'))
@@ -181,7 +158,6 @@ function renderClients() {
 
 	return table;
 }
-
 
 var WIZARD_NETWORK = 'lan';
 var DEFAULT_SSID = 'OpenWrt';
@@ -525,7 +501,7 @@ return view.extend({
 		return Promise.all([
 			callStatus().catch(function () { return {}; }),
 			common.hostHints(),
-			common.meshStatus()
+			common.meshStatus().catch(function () { return {}; })
 		]);
 	},
 
@@ -627,10 +603,10 @@ return view.extend({
 		o.datatype = 'range(1,60)';
 		o.default = '30';
 
-		o = sub.option(form.Value, 'cross_band_delta', _('Cross-band correction'),
-			_('Assumed difference in dB between the bands when no measurement of the other band is available.'));
-		o.datatype = 'range(0,30)';
-		o.default = '8';
+		o = sub.option(form.Value, 'node_rssi_diff', _('Device difference'),
+			_('Move the client to another device of the Wi-Fi system when that device hears it this many dB better on the same band.'));
+		o.datatype = 'range(1,60)';
+		o.default = '12';
 
 		o = sub.option(form.Value, 'kick_rssi', _('Disconnect threshold'),
 			_('A client below this level is moved away even from the preferred band.'));

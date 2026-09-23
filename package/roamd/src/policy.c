@@ -10,17 +10,13 @@
 #define BTM_CELL_PREF		0
 #define KICK_REASON		5
 #define STEER_RETRY_INTERVAL	5000
+#define BEACON_REQ_PER_POLL	4
 
 static struct blob_buf b;
 
 static enum roam_band preferred_band(void)
 {
 	return config.prefer == PREFER_LOW ? BAND_LOW : BAND_HIGH;
-}
-
-static enum roam_band locked_band(enum roam_lock lock)
-{
-	return lock == LOCK_LOW ? BAND_LOW : BAND_HIGH;
 }
 
 static const char *bss_nr_string(const struct roam_bss *bss)
@@ -50,46 +46,19 @@ static bool band_info_fresh(const struct roam_sta_band *info, enum roam_band ban
 	return roam_now - info->seen <= config.age_time;
 }
 
-static int estimated_signal(const struct roam_sta *sta, enum roam_band band, enum roam_band from)
-{
-	const struct roam_sta_band *info = &sta->band[band];
-
-	if (band_info_fresh(info, band))
-		return info->signal;
-
-	if (sta->band[from].signal == ROAMD_NO_SIGNAL)
-		return ROAMD_NO_SIGNAL;
-
-	if (band == BAND_HIGH && from == BAND_LOW)
-		return sta->band[from].signal - config.cross_band_delta;
-
-	if (band == BAND_LOW && from == BAND_HIGH)
-		return sta->band[from].signal + config.cross_band_delta;
-
-	return ROAMD_NO_SIGNAL;
-}
-
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev)
 {
 	struct roam_sta_band *pref, *cur;
 	enum roam_band want;
-	enum roam_lock lock;
 
-	if (!config.enabled)
+	if (!config.enabled || !roam_bss_matches(bss))
 		return true;
 
-	if (!roam_device_node_allowed(sta->addr, mesh_self_node_id()))
+	if (roam_admit(sta->addr, mesh_self_node_id(), bss->band) != ADMIT_OK)
 		return false;
 
-	if (ev == EVENT_ASSOC)
+	if (ev == EVENT_ASSOC || !roam_bss_target(bss))
 		return true;
-
-	if (!roam_bss_matches(bss) || !roam_bss_target(bss))
-		return true;
-
-	lock = roam_device_lock(sta->addr);
-	if (lock != LOCK_NONE)
-		return bss->band == locked_band(lock);
 
 	if (!config.band_steering || config.prefer == PREFER_NONE || !config.deny_probe)
 		return true;
@@ -135,7 +104,8 @@ allow:
 	return true;
 }
 
-static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to)
+static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to,
+				  unsigned int *budget)
 {
 	if (!sta->rrm || !config.neighbor_reports || !to->op_class)
 		return;
@@ -145,6 +115,11 @@ static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, s
 
 	if (roam_now - sta->last_beacon_req < config.beacon_req_interval)
 		return;
+
+	if (!*budget)
+		return;
+
+	(*budget)--;
 
 	sta->last_beacon_req = roam_now;
 	sta->beacon_req_silent++;
@@ -187,14 +162,14 @@ static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_
 	sta->steer_from = from->band;
 	sta->steer_count++;
 
-	mesh_log_local(sta->mac, from->band, to->band, MESH_EV_STEER);
+	mesh_log_local(sta->mac, from->band, to->band, NULL, MESH_EV_STEER);
 
 	roam_log(ROAM_L_INFO, "roamd: steering %s from %s GHz to %s GHz (attempt %u of %u)",
 		 sta->mac, roam_band_name(from->band), roam_band_name(to->band),
 		 sta->steer_count, config.steer_retries);
 }
 
-void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
+static void sta_del_client(struct roam_sta *sta, struct roam_bss *from)
 {
 	blob_buf_init(&b, 0);
 	blobmsg_add_string(&b, "addr", sta->mac);
@@ -203,6 +178,25 @@ void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
 	blobmsg_add_u32(&b, "ban_time", config.deny_time);
 	roam_bss_invoke(from, "del_client", &b);
 
+	roam_sta_reset(sta);
+}
+
+static void policy_evict(struct roam_sta *sta, struct roam_bss *from, enum roam_admit verdict)
+{
+	bool node = verdict == ADMIT_DENY_NODE;
+
+	roam_log(ROAM_L_INFO, "roamd: %s is not allowed %s, disconnecting from %s (%s GHz)",
+		 sta->mac, node ? "on this device" : "on this band",
+		 from->ifname, roam_band_name(from->band));
+
+	mesh_log_local(sta->mac, from->band, MESH_BAND_NA, NULL,
+		       node ? MESH_EV_DENY_NODE : MESH_EV_DENY_BAND);
+
+	sta_del_client(sta, from);
+}
+
+void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
+{
 	roam_log(ROAM_L_INFO, "roamd: disconnecting %s from %s (%s GHz)",
 		 sta->mac, from->ifname, roam_band_name(from->band));
 
@@ -210,8 +204,8 @@ void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
 	sta->steer_from = from->band;
 	sta->steer_count++;
 
-	mesh_log_local(sta->mac, from->band, MESH_BAND_NA, MESH_EV_KICK);
-	roam_sta_reset(sta);
+	mesh_log_local(sta->mac, from->band, MESH_BAND_NA, NULL, MESH_EV_KICK);
+	sta_del_client(sta, from);
 }
 
 bool roam_policy_can_steer(const struct roam_sta *sta)
@@ -223,43 +217,42 @@ bool roam_policy_can_steer(const struct roam_sta *sta)
 }
 
 static bool sta_should_leave(struct roam_sta *sta, struct roam_bss *bss,
-			     struct roam_bss *target, enum roam_lock lock)
+			     struct roam_bss *target)
 {
 	enum roam_band want = preferred_band();
 	int here = sta->band[bss->band].signal;
 	int there;
 
-	if (lock != LOCK_NONE)
-		return bss->band != locked_band(lock);
-
 	if (here != ROAMD_NO_SIGNAL && here < config.kick_rssi)
+		return true;
+
+	if (!band_info_fresh(&sta->band[target->band], target->band))
+		return false;
+
+	there = sta->band[target->band].signal;
+
+	if (here != ROAMD_NO_SIGNAL && there - here >= config.rssi_diff)
 		return true;
 
 	if (bss->band == want) {
 		if (here == ROAMD_NO_SIGNAL || here >= config.rssi_low)
 			return false;
 
-		if (!band_info_fresh(&sta->band[target->band], target->band))
-			return false;
-
-		return sta->band[target->band].signal > here;
+		return there > here;
 	}
 
 	if (want == BAND_HIGH && !sta->band[bss->band].ht)
 		return false;
 
-	there = estimated_signal(sta, want, bss->band);
-	if (there == ROAMD_NO_SIGNAL || there < config.rssi_good)
+	if (there < config.rssi_good)
 		return false;
 
-	if (here != ROAMD_NO_SIGNAL && here - there >= config.rssi_diff)
-		return false;
-
-	return true;
+	return here == ROAMD_NO_SIGNAL || here - there < config.rssi_diff;
 }
 
 void roam_policy_run(struct roam_bss *bss)
 {
+	unsigned int beacon_budget = BEACON_REQ_PER_POLL;
 	struct roam_bss *target;
 	struct roam_sta *sta;
 
@@ -267,14 +260,17 @@ void roam_policy_run(struct roam_bss *bss)
 		return;
 
 	avl_for_each_element(&roam_sta_tree, sta, avl) {
+		enum roam_admit verdict;
+
 		if (sta->bss != bss)
 			continue;
 
-		if (!roam_device_node_allowed(sta->addr, mesh_self_node_id()))
-			roam_policy_kick(sta, bss);
+		verdict = roam_admit(sta->addr, mesh_self_node_id(), bss->band);
+		if (verdict != ADMIT_OK)
+			policy_evict(sta, bss, verdict);
 	}
 
-	if (!config.bss_transition)
+	if (!config.bss_transition || !config.band_steering || config.prefer == PREFER_NONE)
 		return;
 
 	target = roam_bss_target(bss);
@@ -282,14 +278,10 @@ void roam_policy_run(struct roam_bss *bss)
 		return;
 
 	avl_for_each_element(&roam_sta_tree, sta, avl) {
-		enum roam_lock lock;
-
 		if (sta->bss != bss)
 			continue;
 
-		lock = roam_device_lock(sta->addr);
-
-		if (lock == LOCK_NONE && (!config.band_steering || config.prefer == PREFER_NONE))
+		if (roam_admit(sta->addr, mesh_self_node_id(), target->band) != ADMIT_OK)
 			continue;
 
 		if (roam_now - sta->connected_since < config.hold_time)
@@ -305,10 +297,10 @@ void roam_policy_run(struct roam_bss *bss)
 		if (!roam_policy_can_steer(sta))
 			continue;
 
-		if (lock == LOCK_NONE && !band_info_fresh(&sta->band[target->band], target->band))
-			policy_beacon_request(sta, bss, target);
+		if (!band_info_fresh(&sta->band[target->band], target->band))
+			policy_beacon_request(sta, bss, target, &beacon_budget);
 
-		if (!sta_should_leave(sta, bss, target, lock))
+		if (!sta_should_leave(sta, bss, target))
 			continue;
 
 		if (!sta->btm) {

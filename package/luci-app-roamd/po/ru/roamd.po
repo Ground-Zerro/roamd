@@ -94,17 +94,50 @@ msgstr "Слабый сигнал"
 msgid "Below this level the preferred band is not offered to the client."
 msgstr "Ниже этого уровня предпочитаемый диапазон устройству не предлагается."
 
+msgid "The device will be reset to factory settings"
+msgstr "Устройство будет сброшено на заводские настройки"
+
+msgid "Before capture, %s (%s) is reset to factory settings. Everything configured on it — networks, passwords, packages, firewall rules — is erased."
+msgstr "Перед захватом %s (%s) сбрасывается на заводские настройки. Всё, что на нём настроено — сети, пароли, пакеты, правила межсетевого экрана, — будет стёрто."
+
+msgid "This is needed so the node starts from a known state: the controller rolls out the whole configuration itself, and leftovers from previous setups are the usual reason a capture breaks halfway."
+msgstr "Это нужно, чтобы узел стартовал с известного состояния: всю конфигурацию раскатывает контроллер, а остатки прежних настроек — обычная причина, по которой захват ломается на полпути."
+
+msgid "Do not capture a device that has to keep working as a router: a node has no own network settings, it only broadcasts the networks of the Wi-Fi system."
+msgstr "Не захватывайте устройство, которое должно остаться роутером: у узла нет собственных сетевых настроек, он только вещает сети Wi-Fi-системы."
+
+msgid "The device will reboot and come back on its own — that takes a few minutes."
+msgstr "Устройство перезагрузится и вернётся на связь само — это занимает несколько минут."
+
+msgid "Continue"
+msgstr "Продолжить"
+
+msgid "Through node"
+msgstr "Через узел"
+
+msgid "node not responding"
+msgstr "узел не отвечает"
+
+msgid "no allowed access point"
+msgstr "нет разрешённой точки"
+
+msgid "The rule is not in effect: the Wi-Fi system has no access points in this band."
+msgstr "Правило не действует: в Wi-Fi-системе нет точек этого диапазона."
+
+msgid "The rule is in effect, but no access point of the Wi-Fi system is allowed for this device right now."
+msgstr "Правило действует, но сейчас устройству не разрешена ни одна точка Wi-Fi-системы."
+
+msgid "Device difference"
+msgstr "Разница между устройствами"
+
+msgid "Move the client to another device of the Wi-Fi system when that device hears it this many dB better on the same band."
+msgstr "Перевести клиента на другое устройство Wi-Fi-системы, если оно слышит его на столько дБ лучше в том же диапазоне."
+
 msgid "Band difference"
 msgstr "Разница между диапазонами"
 
 msgid "Keep the client where it is when the current band is this many dB stronger."
 msgstr "Оставлять устройство на месте, если текущий диапазон сильнее на столько дБ."
-
-msgid "Cross-band correction"
-msgstr "Поправка между диапазонами"
-
-msgid "Assumed difference in dB between the bands when no measurement of the other band is available."
-msgstr "Предполагаемая разница в дБ между диапазонами, когда измерений второго диапазона нет."
 
 msgid "Disconnect threshold"
 msgstr "Порог отключения"
@@ -243,9 +276,6 @@ msgstr "Нет подключённых устройств"
 
 msgid "GHz"
 msgstr "ГГц"
-
-msgid "Allowed band"
-msgstr "Разрешённый диапазон"
 
 msgid "both bands"
 msgstr "оба диапазона"
@@ -395,6 +425,12 @@ msgstr "Автоматическое обновление"
 msgid "Backhaul key"
 msgstr "Ключ транспортной сети"
 
+msgid "dB. How much weaker than 2.4 GHz the 5 GHz signal may be and still be chosen."
+msgstr "дБ. Насколько 5 ГГц может уступать 2,4 ГГц и всё равно быть выбранным."
+
+msgid "dBm. Below this level 5 GHz is not chosen."
+msgstr "дБм. Слабее этого уровня 5 ГГц не выбирается."
+
 msgid "Backhaul network name"
 msgstr "Имя транспортной сети"
 
@@ -433,9 +469,6 @@ msgstr "От"
 
 msgid "IP address"
 msgstr "IP-адрес"
-
-msgid "If the device is not found or the capture does not finish, reset it to factory settings and try again."
-msgstr "Если устройство не найдено или захват не завершается, сбросьте его к заводским настройкам и повторите попытку."
 
 msgid "MAC"
 msgstr "MAC"
@@ -494,8 +527,11 @@ msgstr "Статус"
 msgid "The transition log is empty"
 msgstr "Журнал переходов пуст"
 
-msgid "This device works as the Mesh Wi-Fi system controller. Add other OpenWrt devices to build one wireless system with central management and monitoring."
-msgstr "Это устройство работает как контроллер Mesh Wi-Fi-системы. Добавляйте другие устройства OpenWrt, чтобы построить единую беспроводную систему с централизованным управлением и мониторингом."
+msgid "This device works as the Mesh Wi-Fi system controller."
+msgstr "Это устройство работает как контроллер Mesh Wi-Fi-системы."
+
+msgid "Add other OpenWrt devices to build one wireless system with central management and monitoring."
+msgstr "Добавляйте другие устройства OpenWrt, чтобы построить единую беспроводную систему с централизованным управлением и мониторингом."
 
 msgid "Time"
 msgstr "Время"
@@ -642,17 +678,11 @@ msgstr "Пусто — используется репозиторий прое�
 msgid "Broadcast on bands"
 msgstr "Вещается в диапазонах"
 
-msgid "5 GHz advantage for the node link"
-msgstr "Преимущество 5 ГГц для звена узла"
+msgid "5 GHz allowance"
+msgstr "Запас для 5 ГГц"
 
-msgid "dB. A node bringing up its wireless link picks 5 GHz if its signal is weaker than 2.4 GHz by no more than this value."
-msgstr "дБ. Поднимая звено по воздуху, узел выбирает 5 ГГц, если его сигнал слабее 2,4 ГГц не больше чем на это значение."
-
-msgid "Minimum signal for the node link"
-msgstr "Минимальный сигнал для звена узла"
-
-msgid "dBm. A weaker link is used only when nothing stronger is heard: 5 GHz gives way to 2.4 GHz, and a parent closer to the controller gives way to a stronger one."
-msgstr "дБм. Более слабое звено используется, только если сильнее ничего не слышно: 5 ГГц уступает 2,4 ГГц, а родитель ближе к контроллеру — родителю с более сильным сигналом."
+msgid "Minimum link signal"
+msgstr "Минимальный сигнал звена"
 
 msgid "not broadcasting"
 msgstr "не вещается"
@@ -770,6 +800,12 @@ msgstr "Все устройства Wi-Fi-системы: через какой 
 
 msgid "forced disconnect"
 msgstr "принудительное отключение"
+
+msgid "device not allowed"
+msgstr "устройство не разрешено"
+
+msgid "band not allowed"
+msgstr "диапазон не разрешён"
 
 msgid "Check for updates"
 msgstr "Проверить обновления"
@@ -954,8 +990,11 @@ msgstr "обновление пакетов"
 msgid "the device is released"
 msgstr "устройство освобождено"
 
-msgid "The operation is running, it takes a few minutes. You can close this window — the process continues."
-msgstr "Операция выполняется, это занимает несколько минут. Окно можно закрыть — процесс продолжится."
+msgid "The operation is running, it takes a few minutes."
+msgstr "Операция выполняется, это занимает несколько минут."
+
+msgid "You can close this window — the process continues."
+msgstr "Окно можно закрыть — процесс продолжится."
 
 msgid "A node is being removed now"
 msgstr "Сейчас идёт удаление узла"
@@ -1023,8 +1062,8 @@ msgstr "обновлено"
 msgid "no updates"
 msgstr "обновлений нет"
 
-msgid "the check failed"
-msgstr "проверка не удалась"
+msgid "the update failed"
+msgstr "обновление не удалось"
 
 msgid "checking for updates"
 msgstr "проверка обновлений"
@@ -1046,6 +1085,24 @@ msgstr "обновление установлено"
 
 msgid "some nodes were not updated"
 msgstr "часть узлов не обновилась"
+
+msgid "the nodes were not updated"
+msgstr "узлы не обновились"
+
+msgid "waiting for the device to come back"
+msgstr "ожидание возвращения устройства на связь"
+
+msgid "I understand the risks and want to skip the reset"
+msgstr "Я понимаю риски и хочу пропустить сброс устройства"
+
+msgid "the reset is skipped by the user"
+msgstr "сброс пропущен по решению пользователя"
+
+msgid "The controller needs root access to the device: SSH on port 22 without a password and, if the device has LuCI, port 80 open. Firmware where the root login is disabled or password-protected cannot be captured."
+msgstr "Контроллеру нужен доступ к устройству под root: SSH на порту 22 без пароля и, если на устройстве есть LuCI, открытый порт 80. Прошивки, где вход под root отключён или защищён паролем, захватить нельзя."
+
+msgid "the device is reset and back online"
+msgstr "устройство сброшено и снова на связи"
 
 msgid "the node is unreachable"
 msgstr "узел недоступен"
@@ -1080,11 +1137,11 @@ msgstr "узел не ответил, какие пакеты ему нужны"
 msgid "the node needs %s, but it has no OpenWrt package repositories; capture stopped before any change to the node"
 msgstr "узлу нужны %s, но у него не настроены репозитории пакетов OpenWrt; захват остановлен, узел не изменён"
 
-msgid "%s is installed on the device: it also manages roaming and would interfere with roamd. Remove it or reset the device to factory settings"
-msgstr "на устройстве установлен %s: он тоже управляет роумингом и будет мешать roamd. Удалите его или сбросьте устройство к заводским настройкам"
+msgid "%s is installed on the device: it also manages roaming and would interfere with roamd. The factory reset before the capture removes it, unless it is built into the firmware"
+msgstr "На устройстве установлен %s: он тоже управляет роумингом и будет мешать roamd. Сброс на заводские настройки перед захватом его удалит, если он не вшит в прошивку"
 
-msgid "%s is installed on the device and conflicts with roamd: remove it or reset the device to factory settings"
-msgstr "на устройстве установлен %s, он конфликтует с roamd: удалите его или сбросьте устройство к заводским настройкам"
+msgid "%s is built into the firmware of this device and conflicts with roamd: such a device cannot become a node"
+msgstr "%s вшит в прошивку этого устройства и конфликтует с roamd: такое устройство не может стать узлом"
 
 msgid "Wireless networks"
 msgstr "Беспроводные сети"
@@ -1172,8 +1229,8 @@ msgstr "Узел не показывает клиентов других уст�
 msgid "A client that moved to another device disappears from one node and appears on another. That is roaming working, not a fault."
 msgstr "Клиент, перешедший на другое устройство, пропадает у одного узла и появляется у другого. Это работает роуминг, а не сбой."
 
-msgid "Node web interface"
-msgstr "Веб-интерфейс узлов"
+msgid "Node behaviour"
+msgstr "Поведение узлов"
 
 msgid "Allow access to the node web interface"
 msgstr "Разблокировать доступ к веб-интерфейсу узлов"
@@ -1204,8 +1261,11 @@ msgstr "Беспроводное подключение этого узла"
 msgid "Applies to the wireless link only. A cable uplink is always allowed and is always preferred."
 msgstr "Относится только к подключению по воздуху. Провод разрешён всегда и всегда предпочтительнее."
 
-msgid "Allow any device and band"
-msgstr "Разрешить любое устройство и диапазон"
+msgid "None of the allowed devices is reachable for this node, so the limit is not applied."
+msgstr "Ни одно из разрешённых устройств этому узлу недоступно, поэтому ограничение не применяется."
+
+msgid "Allow any device"
+msgstr "Разрешить любое устройство"
 
 msgid "Remove node"
 msgstr "Удалить узел"
@@ -1235,6 +1295,3 @@ msgstr "Подготовка"
 
 msgid "dBm"
 msgstr "дБм"
-
-msgid "MHz"
-msgstr "МГц"

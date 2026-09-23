@@ -269,8 +269,10 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 			blobmsg_add_string(&b, "mac", m->mac);
 			blobmsg_add_string(&b, "addr", m->addr);
 			blobmsg_add_u8(&b, "managed", m->managed);
-			blobmsg_add_string(&b, "bh_band", m->bh_band);
 			blobmsg_add_string(&b, "bh_nodes", m->bh_nodes);
+
+			if (m->bh_nodes[0] && !mesh_parent_reachable(m->id, m->bh_nodes))
+				blobmsg_add_u8(&b, "bh_nodes_void", 1);
 			mesh_member_live(m->id, &b);
 			blobmsg_close_table(&b, e);
 		}
@@ -353,7 +355,9 @@ static int roamd_mesh_acquire(struct ubus_context *ctx, struct ubus_object *obj,
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	blob_buf_init(&b, 0);
-	mesh_ctrl_acquire(blobmsg_get_string(tb[MESH_ARG_ADDR]), &b);
+	mesh_ctrl_acquire(blobmsg_get_string(tb[MESH_ARG_ADDR]),
+			  !tb[MESH_ARG_RESET] ||
+			  roam_uci_bool(blobmsg_get_string(tb[MESH_ARG_RESET])), &b);
 	ubus_send_reply(ctx, req, b.head);
 
 	return 0;
@@ -488,7 +492,6 @@ static int roamd_mesh_member_update(struct ubus_context *ctx, struct ubus_object
 
 	if (!mesh_member_set(blobmsg_get_string(tb[MESH_ARG_ID]),
 			     tb[MESH_ARG_NAME] ? blobmsg_get_string(tb[MESH_ARG_NAME]) : NULL,
-			     tb[MESH_ARG_BAND] ? blobmsg_get_string(tb[MESH_ARG_BAND]) : NULL,
 			     tb[MESH_ARG_NODES] ? blobmsg_get_string(tb[MESH_ARG_NODES]) : NULL))
 		return UBUS_STATUS_NOT_FOUND;
 
@@ -619,7 +622,9 @@ static int roamd_mesh_steer(struct ubus_context *ctx, struct ubus_object *obj,
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	roam_time_update();
-	if (!mesh_node_steer(blobmsg_get_string(tb[MESH_ARG_MAC]), tb[MESH_ARG_NEIGHBORS]))
+	if (!mesh_node_steer(blobmsg_get_string(tb[MESH_ARG_MAC]),
+			     tb[MESH_ARG_ID] ? blobmsg_get_string(tb[MESH_ARG_ID]) : NULL,
+			     tb[MESH_ARG_NEIGHBORS]))
 		return UBUS_STATUS_NOT_FOUND;
 
 	return 0;
@@ -793,6 +798,17 @@ static struct ubus_object roamd_object = {
 	.methods = roamd_methods,
 	.n_methods = ARRAY_SIZE(roamd_methods),
 };
+
+void roam_ubus_call_local(const char *method, struct blob_attr *msg)
+{
+	int i;
+
+	for (i = 0; i < roamd_object.n_methods; i++)
+		if (!strcmp(roamd_object.methods[i].name, method)) {
+			roamd_object.methods[i].handler(ubus_ctx, &roamd_object, NULL, method, msg);
+			return;
+		}
+}
 
 void roam_ubus_object_init(void)
 {

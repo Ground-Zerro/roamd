@@ -27,7 +27,9 @@ struct client_rec {
 	uint64_t rx_bytes;
 	uint64_t tx_bytes;
 	uint32_t last_seen;
-	bool online;
+	int sig[BAND_MAX];
+	uint32_t sig_age[BAND_MAX];
+	uint8_t state;
 	bool wired;
 	bool used;
 	char host[MESH_NAME_MAX];
@@ -56,6 +58,18 @@ static uint64_t num_field(struct blob_attr *table, const char *name)
 	return 0;
 }
 
+enum client_state {
+	CLIENT_UNKNOWN,
+	CLIENT_OFFLINE,
+	CLIENT_ONLINE
+};
+
+static const char *const state_name[] = {
+	[CLIENT_UNKNOWN] = "unknown",
+	[CLIENT_OFFLINE] = "offline",
+	[CLIENT_ONLINE] = "online"
+};
+
 static struct client_rec clients[MESH_CLIENT_MAX];
 
 static bool mac_skip(const uint8_t *addr);
@@ -72,7 +86,7 @@ static struct client_rec *client_upsert(const uint8_t *addr, const char *mac)
 		if (clients[i].used) {
 			if (!memcmp(clients[i].addr, addr, 6))
 				return &clients[i];
-			if (!clients[i].online &&
+			if (clients[i].state != CLIENT_ONLINE &&
 			    (!oldest || clients[i].last_seen < oldest->last_seen))
 				oldest = &clients[i];
 		} else if (!free_slot) {
@@ -116,12 +130,34 @@ static void client_touch(struct client_rec *c, const char *node, const char *ban
 	c->rx_bytes = rx;
 	c->tx_bytes = tx;
 	c->last_seen = now;
-	c->online = true;
+	c->sig[BAND_LOW] = ROAMD_NO_SIGNAL;
+	c->sig[BAND_HIGH] = ROAMD_NO_SIGNAL;
+	c->state = CLIENT_ONLINE;
+}
+
+static bool client_settled(const struct client_rec *c)
+{
+	if (c->state != CLIENT_ONLINE || !c->band[0])
+		return false;
+
+	return roam_admit(c->addr, c->node,
+			  mesh_band_from_bit(mesh_band_bit(c->band))) == ADMIT_OK;
+}
+
+static void node_settle(const char *node)
+{
+	unsigned int i;
+
+	for (i = 0; i < MESH_CLIENT_MAX; i++)
+		if (clients[i].used && clients[i].state == CLIENT_UNKNOWN &&
+		    !strcmp(clients[i].node, node))
+			clients[i].state = CLIENT_OFFLINE;
 }
 
 static bool client_claimable(const struct client_rec *c, uint32_t connected)
 {
-	return !c->online || (connected && (!c->connected || connected < c->connected));
+	return c->state != CLIENT_ONLINE ||
+	       (connected && (!c->connected || connected < c->connected));
 }
 
 static void refresh_local(uint32_t now)
@@ -141,9 +177,7 @@ static void refresh_local(uint32_t now)
 		if (mac_skip(a->addr))
 			continue;
 
-		snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
-			 a->addr[0], a->addr[1], a->addr[2],
-			 a->addr[3], a->addr[4], a->addr[5]);
+		roam_mac_str(a->addr, mac, sizeof(mac));
 
 		c = client_upsert(a->addr, mac);
 		if (!c || !client_claimable(c, a->connected))
@@ -151,10 +185,22 @@ static void refresh_local(uint32_t now)
 
 		client_touch(c, "controller", a->wired ? NULL : roam_band_name(a->band),
 			     a->rate, a->std, a->width, a->nss, a->rx_bytes, a->tx_bytes, now);
+
+		if (!a->wired) {
+			struct roam_sta *sta = roam_sta_get(a->addr, false);
+			enum roam_band band;
+
+			for (band = 0; sta && band < BAND_MAX; band++)
+				c->sig[band] = roam_sta_signal_seen(sta, band,
+								   &c->sig_age[band]);
+		}
+
 		c->connected = a->connected;
 		c->wired = a->wired;
 		strncpy(c->enc, a->enc, sizeof(c->enc) - 1);
 	}
+
+	node_settle("controller");
 }
 
 enum { CL_MAC, CL_BAND, CL_STD, CL_ENC, CL_WIRED, __CL_MAX };
@@ -191,8 +237,13 @@ static void refresh_member(const char *id, uint32_t now)
 	free(data);
 
 	blobmsg_parse(mp, 2, tb, blob_data(mb.head), blob_len(mb.head));
-	if (!tb[0] || !blobmsg_get_u8(tb[0]) || !tb[1])
+	if (!tb[0] || !blobmsg_get_u8(tb[0]))
 		return;
+
+	if (!tb[1]) {
+		node_settle(id);
+		return;
+	}
 
 	blobmsg_for_each_attr(cur, tb[1], rem) {
 		struct blob_attr *c[__CL_MAX];
@@ -228,7 +279,14 @@ static void refresh_member(const char *id, uint32_t now)
 		rec->enc[0] = '\0';
 		if (c[CL_ENC])
 			strncpy(rec->enc, blobmsg_get_string(c[CL_ENC]), sizeof(rec->enc) - 1);
+
+		rec->sig[BAND_LOW] = (int)num_field(cur, "signal_24");
+		rec->sig[BAND_HIGH] = (int)num_field(cur, "signal_5");
+		rec->sig_age[BAND_LOW] = (uint32_t)num_field(cur, "signal_24_age");
+		rec->sig_age[BAND_HIGH] = (uint32_t)num_field(cur, "signal_5_age");
 	}
+
+	node_settle(id);
 }
 
 static void dev_opt(struct uci_session *u, const char *sect, const char *opt, const char *val)
@@ -316,45 +374,6 @@ static bool mac_is_member(const uint8_t *addr)
 	return false;
 }
 
-#define ARP_MAX	128
-
-struct arp_rec {
-	uint8_t addr[6];
-	char ip[16];
-};
-
-static unsigned int arp_load(struct arp_rec *out)
-{
-	char line[256];
-	unsigned int n = 0;
-	FILE *f = fopen("/proc/net/arp", "r");
-
-	if (!f)
-		return 0;
-
-	while (n < ARP_MAX && fgets(line, sizeof(line), f)) {
-		char ip[64], type[16], flags[16], hw[32];
-		struct ether_addr ea;
-
-		if (sscanf(line, "%63s %15s %15s %31s", ip, type, flags, hw) != 4)
-			continue;
-
-		if (!strcmp(flags, "0x0") || strlen(ip) >= sizeof(out[n].ip))
-			continue;
-
-		if (!ether_aton_r(hw, &ea))
-			continue;
-
-		memcpy(out[n].addr, ea.ether_addr_octet, 6);
-		strcpy(out[n].ip, ip);
-		n++;
-	}
-
-	fclose(f);
-
-	return n;
-}
-
 static struct client_rec *client_find(const uint8_t *addr)
 {
 	unsigned int i;
@@ -366,10 +385,8 @@ static struct client_rec *client_find(const uint8_t *addr)
 	return NULL;
 }
 
-static void refresh_leases(uint32_t now)
+static void refresh_leases(void)
 {
-	struct arp_rec arp[ARP_MAX];
-	unsigned int n_arp = arp_load(arp);
 	char line[256];
 	FILE *f = fopen("/tmp/dhcp.leases", "r");
 
@@ -380,39 +397,14 @@ static void refresh_leases(uint32_t now)
 		char hw[32], ip[16], host[MESH_NAME_MAX];
 		struct ether_addr ea;
 		struct client_rec *c;
-		const char *owner;
-		unsigned int i;
-		bool alive = false;
 
 		if (sscanf(line, "%*s %31s %15s %63s", hw, ip, host) != 3)
 			continue;
 
-		if (!ether_aton_r(hw, &ea) || mac_skip(ea.ether_addr_octet))
+		if (!ether_aton_r(hw, &ea))
 			continue;
 
 		c = client_find(ea.ether_addr_octet);
-
-		if (!c || (c->wired && !c->online)) {
-			for (i = 0; i < n_arp && !alive; i++)
-				alive = !memcmp(arp[i].addr, ea.ether_addr_octet, 6) &&
-					!strcmp(arp[i].ip, ip);
-
-			owner = alive ? mesh_bridge_member_behind(ea.ether_addr_octet) : NULL;
-
-			if (alive && !owner && c && strcmp(c->node, "controller"))
-				alive = false;
-
-			if (alive) {
-				if (!c)
-					c = client_upsert(ea.ether_addr_octet, hw);
-				if (c) {
-					client_touch(c, owner ? owner : "controller", NULL,
-						     0, NULL, 0, 0, 0, 0, now);
-					c->wired = true;
-				}
-			}
-		}
-
 		if (!c)
 			continue;
 
@@ -436,6 +428,20 @@ static bool mac_skip(const uint8_t *addr)
 	return mesh_ctrl_acquire_mac(busy) && !memcmp(busy, addr, 6);
 }
 
+static bool node_known(const char *id)
+{
+	struct mesh_member *m;
+
+	if (!strcmp(id, "controller"))
+		return true;
+
+	list_for_each_entry(m, &mesh_members, list)
+		if (!strcmp(m->id, id))
+			return true;
+
+	return false;
+}
+
 static void clients_refresh(void)
 {
 	struct mesh_member *m;
@@ -449,7 +455,7 @@ static void clients_refresh(void)
 			continue;
 		}
 
-		clients[i].online = false;
+		clients[i].state = CLIENT_UNKNOWN;
 	}
 
 	list_for_each_entry(m, &mesh_members, list)
@@ -457,8 +463,13 @@ static void clients_refresh(void)
 
 	refresh_local(now);
 
+	for (i = 0; i < MESH_CLIENT_MAX; i++)
+		if (clients[i].used && clients[i].state == CLIENT_UNKNOWN &&
+		    !node_known(clients[i].node))
+			clients[i].state = CLIENT_OFFLINE;
+
 	if (mesh.role == MESH_CONTROLLER)
-		refresh_leases(now);
+		refresh_leases();
 }
 
 unsigned int mesh_clients_count(void)
@@ -468,7 +479,7 @@ unsigned int mesh_clients_count(void)
 	clients_refresh();
 
 	for (i = 0; i < MESH_CLIENT_MAX; i++)
-		if (clients[i].used && clients[i].online)
+		if (clients[i].used && clients[i].state == CLIENT_ONLINE)
 			n++;
 
 	return n;
@@ -481,7 +492,7 @@ unsigned int mesh_clients_local(void)
 	clients_refresh();
 
 	for (i = 0; i < MESH_CLIENT_MAX; i++)
-		if (clients[i].used && clients[i].online &&
+		if (clients[i].used && clients[i].state == CLIENT_ONLINE &&
 		    !strcmp(clients[i].node, "controller"))
 			n++;
 
@@ -569,7 +580,7 @@ void mesh_clients_load(void)
 		strncpy(c->node, node, sizeof(c->node) - 1);
 		c->last_seen = seen;
 		c->wired = wired != 0;
-		c->online = false;
+		c->state = CLIENT_UNKNOWN;
 	}
 
 	fclose(f);
@@ -586,6 +597,7 @@ void mesh_clients_dump(struct blob_buf *b)
 	arr = blobmsg_open_array(b, "clients");
 	for (i = 0; i < MESH_CLIENT_MAX; i++) {
 		struct client_rec *c = &clients[i];
+		enum roam_lock lock;
 		void *e;
 
 		if (!c->used)
@@ -616,8 +628,30 @@ void mesh_clients_dump(struct blob_buf *b)
 			blobmsg_add_u64(b, "rx_bytes", c->rx_bytes);
 		if (c->tx_bytes)
 			blobmsg_add_u64(b, "tx_bytes", c->tx_bytes);
+		lock = roam_device_lock(c->addr);
+		if (lock != LOCK_NONE) {
+			enum roam_band locked = roam_locked_band(lock);
+
+			blobmsg_add_string(b, "band_lock", roam_band_name(locked));
+			blobmsg_add_u8(b, "band_lock_active",
+				       mesh_band_usable(roam_band_bit(locked)));
+		}
+
+		if (!c->wired && mesh.role == MESH_CONTROLLER &&
+		    !client_settled(c) && !mesh_poll_has_place(c->addr))
+			blobmsg_add_u8(b, "no_place", 1);
+
+		if (c->sig[BAND_LOW] != ROAMD_NO_SIGNAL) {
+			blobmsg_add_u32(b, "signal_24", (uint32_t)c->sig[BAND_LOW]);
+			blobmsg_add_u32(b, "signal_24_age", c->sig_age[BAND_LOW]);
+		}
+		if (c->sig[BAND_HIGH] != ROAMD_NO_SIGNAL) {
+			blobmsg_add_u32(b, "signal_5", (uint32_t)c->sig[BAND_HIGH]);
+			blobmsg_add_u32(b, "signal_5_age", c->sig_age[BAND_HIGH]);
+		}
+
 		blobmsg_add_u32(b, "last_seen", c->last_seen);
-		blobmsg_add_u8(b, "online", c->online);
+		blobmsg_add_string(b, "state", state_name[c->state]);
 		blobmsg_close_table(b, e);
 	}
 	blobmsg_close_array(b, arr);

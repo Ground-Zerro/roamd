@@ -20,12 +20,6 @@ struct neigh_req {
 	struct ndmsg nd;
 };
 
-static void mac_format(const uint8_t *raw, char *out, size_t len)
-{
-	snprintf(out, len, "%02x:%02x:%02x:%02x:%02x:%02x",
-		 raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]);
-}
-
 unsigned int mesh_neigh_dump(const char *ifname, struct mesh_neigh *out, unsigned int max)
 {
 	struct neigh_req req = { 0 };
@@ -106,7 +100,7 @@ unsigned int mesh_neigh_dump(const char *ifname, struct mesh_neigh *out, unsigne
 						  sizeof(addr));
 				else if (rta->rta_type == NDA_LLADDR &&
 					 RTA_PAYLOAD(rta) == 6)
-					mac_format(RTA_DATA(rta), mac, sizeof(mac));
+					roam_mac_str(RTA_DATA(rta), mac, sizeof(mac));
 			}
 
 			if (!addr[0] || !mac[0])

@@ -19,13 +19,11 @@
 #define MESH_ACQUIRE	"/usr/sbin/roamd"
 #define MESH_SELF	"/usr/sbin/roamd"
 #define MESH_RELEASE	"/usr/sbin/roamd"
-#define MESH_RC_COMMON		"/etc/rc.common"
 #define MESH_NETWORK_INIT	"/etc/init.d/network"
 #define MESH_DNSMASQ_INIT	"/etc/init.d/dnsmasq"
 #define MESH_LEASE_PREFIX	"roamd_"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
 #define SELFCHECK	"/var/run/roamd/selfcheck.json"
-#define ACQUIRE_DIR	"/var/run/roamd/acquire"
 #define MEMBERS_DIR	"/var/run/roamd/members"
 #define MESH_POLL_INTERVAL	15000
 #define TASK_STALE	180
@@ -126,7 +124,7 @@ static bool acquire_mac_read(char *out, size_t size)
 	if (!acquire_task[0])
 		return false;
 
-	snprintf(path, sizeof(path), "%s/%s.mac", ACQUIRE_DIR, acquire_task);
+	snprintf(path, sizeof(path), "%s/%s.mac", MESH_ACQUIRE_DIR, acquire_task);
 	data = mesh_slurp(path, 32);
 	if (!data)
 		return false;
@@ -190,9 +188,10 @@ static struct mesh_member *member_by_id(const char *id)
 	return NULL;
 }
 
-static bool acquire_spawn(const char *script, const char *sub, const char *arg)
+static bool acquire_spawn(const char *script, const char *sub, const char *arg,
+			  const char *extra)
 {
-	char *argv[6];
+	char *argv[7];
 	unsigned int n = 0;
 
 	if (!sub) {
@@ -212,13 +211,16 @@ static bool acquire_spawn(const char *script, const char *sub, const char *arg)
 		argv[n++] = (char *)arg;
 
 	argv[n++] = acquire_task;
+
+	if (extra)
+		argv[n++] = (char *)extra;
 	argv[n] = NULL;
 
 	return mesh_task_run(&acquire_job, argv);
 }
 
 static void acquire_start(const char *kind, const char *script, const char *sub, const char *arg,
-			  const char *addr, struct blob_buf *b)
+			  const char *addr, const char *extra, struct blob_buf *b)
 {
 	if (acquire_job.busy) {
 		if (b) {
@@ -234,7 +236,7 @@ static void acquire_start(const char *kind, const char *script, const char *sub,
 	snprintf(acquire_addr, sizeof(acquire_addr), "%s", addr ? addr : "");
 	acquire_kind = kind;
 
-	if (!acquire_spawn(script, sub, arg)) {
+	if (!acquire_spawn(script, sub, arg, extra)) {
 		if (b)
 			blobmsg_add_string(b, "error", "spawn_failed");
 		return;
@@ -244,14 +246,14 @@ static void acquire_start(const char *kind, const char *script, const char *sub,
 		blobmsg_add_string(b, "task_id", acquire_task);
 }
 
-void mesh_ctrl_acquire(const char *addr, struct blob_buf *b)
+void mesh_ctrl_acquire(const char *addr, bool reset, struct blob_buf *b)
 {
 	if (!addr || !addr[0]) {
 		blobmsg_add_string(b, "error", "no_address");
 		return;
 	}
 
-	acquire_start("acquire", MESH_ACQUIRE, "acquire", addr, addr, b);
+	acquire_start("acquire", MESH_ACQUIRE, "acquire", addr, addr, reset ? NULL : "keep", b);
 }
 
 void mesh_ctrl_release(const char *id, struct blob_buf *b)
@@ -263,7 +265,7 @@ void mesh_ctrl_release(const char *id, struct blob_buf *b)
 		return;
 	}
 
-	acquire_start("release", MESH_RELEASE, "release", id, target->addr, b);
+	acquire_start("release", MESH_RELEASE, "release", id, target->addr, NULL, b);
 }
 
 void mesh_ctrl_update(const char *id, struct blob_buf *b)
@@ -275,12 +277,12 @@ void mesh_ctrl_update(const char *id, struct blob_buf *b)
 		return;
 	}
 
-	acquire_start("update", MESH_SELF, "node-update", target->addr, target->addr, b);
+	acquire_start("update", MESH_SELF, "node-update", target->addr, target->addr, NULL, b);
 }
 
 void mesh_ctrl_self_update(struct blob_buf *b)
 {
-	acquire_start("selfupdate", MESH_SELF, "self-update", NULL, NULL, b);
+	acquire_start("selfupdate", MESH_SELF, "self-update", NULL, NULL, NULL, b);
 }
 
 void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
@@ -291,8 +293,8 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 	struct stat st;
 	void *steps;
 
-	snprintf(path, sizeof(path), "%s/%s", ACQUIRE_DIR, task);
-	data = mesh_slurp(path, 8192);
+	snprintf(path, sizeof(path), "%s/%s", MESH_ACQUIRE_DIR, task);
+	data = mesh_slurp(path, MESH_TASK_MAX);
 	if (!data) {
 		if (running) {
 			void *empty;
@@ -327,8 +329,9 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 		blobmsg_add_string(b, "message", message ? message : "");
 		blobmsg_close_table(b, e);
 
-		terminal = !strcmp(status, "error") ||
-			   (!strcmp(line, "done") && !strcmp(status, "ok"));
+		if (!strcmp(status, "error") ||
+		    (!strcmp(line, "done") && !strcmp(status, "ok")))
+			terminal = true;
 	}
 	blobmsg_close_array(b, steps);
 
@@ -521,7 +524,7 @@ static void autoupdate_cb(struct uloop_timeout *t)
 		return;
 	}
 
-	acquire_start("autoupdate", MESH_SELF, "autoupdate", NULL, NULL, NULL);
+	acquire_start("autoupdate", MESH_SELF, "autoupdate", NULL, NULL, NULL, NULL);
 	uloop_timeout_set(t, AUTOUPDATE_STEP * 1000);
 }
 
@@ -573,7 +576,7 @@ void mesh_member_live(const char *id, struct blob_buf *b)
 	blobmsg_add_u8(b, "online", 0);
 }
 
-bool mesh_member_set(const char *id, const char *name, const char *band, const char *nodes)
+bool mesh_member_set(const char *id, const char *name, const char *nodes)
 {
 	struct uci_session u;
 	struct uci_section *sec;
@@ -585,10 +588,6 @@ bool mesh_member_set(const char *id, const char *name, const char *band, const c
 
 	if (sec && name)
 		uci_session_set(&u, sec->e.name, "name", name);
-
-	if (sec && band)
-		uci_session_set(&u, sec->e.name, "bh_band",
-				strcmp(band, "both") ? band : "");
 
 	if (sec && nodes) {
 		char buf[MESH_BH_ALLOW_LEN], *save = NULL, *tok;

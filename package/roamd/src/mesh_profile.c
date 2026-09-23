@@ -10,6 +10,8 @@
 #include "mesh.h"
 
 #define MEMBERS_DIR	"/var/run/roamd/members"
+#define PARENT_ENTRY_MAX	(MESH_MAC_MAX + PARENT_CHAIN + 16)
+#define PARENT_MAX		MESH_BH_PARENT_MAX
 #define PARENT_CHAIN	160
 #define DEPTH_UNSET	-1
 #define DEPTH_BUSY	-2
@@ -32,7 +34,7 @@ static const char *const global_opts[] = {
 };
 
 static const char *const policy_opts[] = {
-	"rssi_good", "rssi_low", "rssi_diff", "kick_rssi", "cross_band_delta",
+	"rssi_good", "rssi_low", "rssi_diff", "node_rssi_diff", "kick_rssi",
 	"hold_time", "age_time", "check_time_low", "check_time_high", "poll_interval",
 	"deny_time", "deny_probe", "allow_kick", "steer_retries", "beacon_req_interval",
 	"log_level"
@@ -114,10 +116,48 @@ bool mesh_member_state(const char *id, const char *field, char *out, size_t len)
 	return ok;
 }
 
+static bool bssid_own(const char *bssid)
+{
+	struct roam_bss *bss;
+
+	list_for_each_entry(bss, &roam_bss_list, list) {
+		char cur[MESH_MAC_MAX];
+
+		roam_mac_str(bss->bssid, cur, sizeof(cur));
+
+		if (!strcasecmp(cur, bssid))
+			return true;
+	}
+
+	return false;
+}
+
+static int member_by_bssid(struct profile_member *m, unsigned int n, const char *bssid)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++) {
+		struct blob_attr *ap;
+		int rem;
+
+		if (!m[i].aps)
+			continue;
+
+		blobmsg_for_each_attr(ap, m[i].aps, rem) {
+			const char *cur = json_str(ap, "bssid");
+
+			if (cur && !strcasecmp(cur, bssid))
+				return (int)i;
+		}
+	}
+
+	return -1;
+}
+
 static int member_depth(struct profile_member *m, unsigned int n, unsigned int i)
 {
 	struct profile_member *cur = &m[i];
-	unsigned int j;
+	int parent;
 
 	if (cur->depth != DEPTH_UNSET)
 		return cur->depth;
@@ -131,23 +171,22 @@ static int member_depth(struct profile_member *m, unsigned int n, unsigned int i
 		return cur->depth;
 	}
 
-	if (!cur->via || !strcmp(cur->via, "controller")) {
+	if (!cur->via || !strcmp(cur->via, MESH_CONTROLLER_OWNER) || bssid_own(cur->via)) {
 		cur->depth = 1;
 		snprintf(cur->chain, sizeof(cur->chain), "%.*s", MESH_ID_MAX - 1, cur->id);
 
 		return cur->depth;
 	}
 
-	for (j = 0; j < n; j++) {
-		if (j == i || strcmp(m[j].id, cur->via))
-			continue;
+	parent = member_by_bssid(m, n, cur->via);
 
-		if (m[j].depth == DEPTH_BUSY || member_depth(m, n, j) < 0)
-			break;
-
-		cur->depth = m[j].depth + 1;
+	if (parent >= 0 && (unsigned int)parent != i && m[parent].depth != DEPTH_BUSY &&
+	    member_depth(m, n, (unsigned int)parent) >= 0) {
+		char parent_chain[PARENT_CHAIN + 1];
+		snprintf(parent_chain, sizeof(parent_chain), "%.*s", PARENT_CHAIN, m[parent].chain);
+		cur->depth = m[parent].depth + 1;
 		snprintf(cur->chain, sizeof(cur->chain), "%.*s-%.*s",
-			 PARENT_CHAIN / 2, m[j].chain, MESH_ID_MAX - 1, cur->id);
+			 PARENT_CHAIN / 2, parent_chain, MESH_ID_MAX - 1, cur->id);
 
 		return cur->depth;
 	}
@@ -185,12 +224,85 @@ static void parents_own(char *out, size_t len)
 		if (strcmp(bss->ssid, mesh.backhaul_ssid))
 			continue;
 
-		snprintf(bssid, sizeof(bssid), "%02x:%02x:%02x:%02x:%02x:%02x",
-			 bss->bssid[0], bss->bssid[1], bss->bssid[2],
-			 bss->bssid[3], bss->bssid[4], bss->bssid[5]);
-
+		roam_mac_str(bss->bssid, bssid, sizeof(bssid));
 		parent_add(out, len, bssid, 0, "", roam_band_name(bss->band));
 	}
+}
+
+static int parent_cmp(const void *a, const void *b)
+{
+	return strcmp(a, b);
+}
+
+static bool parent_known(const char *entry, char list[][PARENT_ENTRY_MAX], unsigned int n)
+{
+	size_t len = strcspn(entry, "/");
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		if (!strncasecmp(list[i], entry, len) && list[i][len] == '/')
+			return true;
+
+	return false;
+}
+
+static void parents_sorted(char *out, size_t len, char entries[][PARENT_ENTRY_MAX],
+			   unsigned int count)
+{
+	size_t used = 0;
+	unsigned int i;
+
+	qsort(entries, count, PARENT_ENTRY_MAX, parent_cmp);
+	out[0] = '\0';
+
+	for (i = 0; i < count; i++) {
+		int n = snprintf(out + used, len - used, "%s%s", used ? " " : "", entries[i]);
+
+		if (n < 0 || (size_t)n >= len - used)
+			break;
+
+		used += n;
+	}
+}
+
+bool mesh_parent_reachable(const char *member_id, const char *nodes)
+{
+	char list[MESH_BH_PARENTS_LEN], allow[MESH_BH_ALLOW_LEN];
+	char *tok, *save = NULL;
+
+	if (!nodes || !nodes[0] || !mesh.backhaul_parents[0])
+		return true;
+
+	snprintf(list, sizeof(list), "%s", mesh.backhaul_parents);
+
+	for (tok = strtok_r(list, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
+		char *depth = strchr(tok, '/');
+		char *chain = depth ? strchr(depth + 1, '/') : NULL;
+		char *band = chain ? strchr(chain + 1, '/') : NULL;
+		const char *owner, *dash;
+		char *asave = NULL, *atok;
+
+		if (!band)
+			continue;
+
+		*chain++ = '\0';
+		*band = '\0';
+
+		if (mesh_chain_has(chain, member_id))
+			continue;
+
+		dash = strrchr(chain, '-');
+		owner = dash ? dash + 1 : (chain[0] ? chain : MESH_CONTROLLER_OWNER);
+
+		snprintf(allow, sizeof(allow), "%s", nodes);
+
+		for (atok = strtok_r(allow, "-", &asave); atok;
+		     atok = strtok_r(NULL, "-", &asave))
+			if (!strcmp(atok, owner))
+				return true;
+	}
+
+	return false;
 }
 
 static void parents_build(char *out, size_t len)
@@ -262,6 +374,28 @@ static void parents_build(char *out, size_t len)
 
 	for (i = 0; i < n; i++)
 		blob_buf_free(&list[i].doc);
+
+	{
+		char entries[PARENT_MAX][PARENT_ENTRY_MAX];
+		char kept[MESH_BH_PARENTS_LEN];
+		unsigned int count = 0;
+		char *tok, *save = NULL;
+
+		snprintf(kept, sizeof(kept), "%s", out);
+
+		for (tok = strtok_r(kept, " ", &save); tok && count < PARENT_MAX;
+		     tok = strtok_r(NULL, " ", &save))
+			snprintf(entries[count++], PARENT_ENTRY_MAX, "%s", tok);
+
+		snprintf(kept, sizeof(kept), "%s", mesh.backhaul_parents);
+
+		for (tok = strtok_r(kept, " ", &save); tok && count < PARENT_MAX;
+		     tok = strtok_r(NULL, " ", &save))
+			if (!parent_known(tok, entries, count))
+				snprintf(entries[count++], PARENT_ENTRY_MAX, "%s", tok);
+
+		parents_sorted(out, len, entries, count);
+	}
 }
 
 static void opts_dump(struct blob_buf *b, const char *name,
@@ -332,6 +466,16 @@ static void credentials_dump(struct blob_buf *b)
 	}
 
 	free(shadow);
+
+	{
+		char pubkey[MESH_PUBKEY_MAX];
+		unsigned int k;
+
+		for (k = 0; k < __MESH_KEY_MAX; k++)
+			if (mesh_ssh_pubkey(k, pubkey, sizeof(pubkey)))
+				blobmsg_add_string(b, mesh_key_fields[k], pubkey);
+	}
+
 	blobmsg_close_table(b, t);
 }
 
@@ -354,7 +498,7 @@ static void devices_dump(struct blob_buf *b)
 
 			t = blobmsg_open_table(b, NULL);
 			blobmsg_add_string(b, "mac", mac);
-			if (band)
+			if (band && mesh_band_usable(mesh_band_bit(band)))
 				blobmsg_add_string(b, "band", band);
 
 			na = blobmsg_open_array(b, "nodes");
@@ -397,6 +541,7 @@ void mesh_profile_build(struct blob_buf *b)
 	blobmsg_add_string(b, "backhaul_ssid", mesh.backhaul_ssid);
 	blobmsg_add_string(b, "backhaul_key", mesh.backhaul_key);
 	blobmsg_add_string(b, "ft_key", mesh.ft_key);
+	blobmsg_add_string(b, "ft_kh", mesh.ft_kh);
 	blobmsg_add_string(b, "wifi_shutdown", mesh.wifi_shutdown ? "1" : "0");
 	blobmsg_add_string(b, "node_ui", mesh.node_ui ? "1" : "0");
 
@@ -431,12 +576,11 @@ void mesh_profile_build(struct blob_buf *b)
 		list_for_each_entry(m, &mesh_members, list) {
 			int n;
 
-			if (!m->bh_band[0] && !m->bh_nodes[0])
+			if (!m->bh_nodes[0])
 				continue;
 
-			n = snprintf(limits + used, sizeof(limits) - used, "%s%s/%s/%s",
-				     used ? " " : "", m->id,
-				     m->bh_band[0] ? m->bh_band : "any", m->bh_nodes);
+			n = snprintf(limits + used, sizeof(limits) - used, "%s%s/%s",
+				     used ? " " : "", m->id, m->bh_nodes);
 
 			if (n < 0 || (size_t)n >= sizeof(limits) - used)
 				break;

@@ -11,7 +11,6 @@
 #include "mesh.h"
 
 #define SELFCHECK	"/var/run/roamd/selfcheck.json"
-#define ACQUIRE_DIR	"/var/run/roamd/acquire"
 #define PKG_DIR		"/var/run/roamd/pkg"
 #define OPKG_STATUS	"/usr/lib/opkg/status"
 #define APK_STATUS	"/lib/apk/db/installed"
@@ -30,21 +29,44 @@ static struct self_job *self_job;
 
 void mesh_task_report(const char *task, const char *step, const char *state, const char *text)
 {
-	char path[160];
+	char path[160], tmp[168];
+	char *data, *line, *save = NULL;
+	size_t len = strlen(step);
+	bool replaced = false;
 	FILE *f;
 
 	if (!task || !task[0])
 		return;
 
-	mesh_dir_ensure(ACQUIRE_DIR);
-	snprintf(path, sizeof(path), ACQUIRE_DIR "/%s", task);
+	mesh_dir_ensure(MESH_ACQUIRE_DIR);
+	snprintf(path, sizeof(path), MESH_ACQUIRE_DIR "/%s", task);
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
 
-	f = fopen(path, "a");
-	if (!f)
+	data = mesh_slurp(path, MESH_TASK_MAX);
+
+	f = fopen(tmp, "w");
+	if (!f) {
+		free(data);
 		return;
+	}
 
-	fprintf(f, "%s\t%s\t%s\n", step, state, text ? text : "");
+	for (line = data ? strtok_r(data, "\n", &save) : NULL; line;
+	     line = strtok_r(NULL, "\n", &save)) {
+		if (!strncmp(line, step, len) && line[len] == '\t') {
+			fprintf(f, "%s\t%s\t%s\n", step, state, text ? text : "");
+			replaced = true;
+			continue;
+		}
+
+		fprintf(f, "%s\n", line);
+	}
+
+	if (!replaced)
+		fprintf(f, "%s\t%s\t%s\n", step, state, text ? text : "");
+
 	fclose(f);
+	free(data);
+	rename(tmp, path);
 }
 
 void mesh_task_open(const char *task)
@@ -55,8 +77,8 @@ void mesh_task_open(const char *task)
 	if (!task || !task[0])
 		return;
 
-	mesh_dir_ensure(ACQUIRE_DIR);
-	snprintf(path, sizeof(path), ACQUIRE_DIR "/%s", task);
+	mesh_dir_ensure(MESH_ACQUIRE_DIR);
+	snprintf(path, sizeof(path), MESH_ACQUIRE_DIR "/%s", task);
 
 	f = fopen(path, "w");
 	if (f)
@@ -144,7 +166,6 @@ bool mesh_self_release(char *branch, size_t bl, char *arch, size_t al)
 
 static void selfcheck_write(struct self_job *job, bool index_ok)
 {
-	static const char *const names[] = { MESH_PKG_MAIN, MESH_PKG_UI };
 	struct blob_buf b = { 0 };
 	char path[128], *json;
 	void *arr;
@@ -159,23 +180,23 @@ static void selfcheck_write(struct self_job *job, bool index_ok)
 	} else {
 		arr = blobmsg_open_array(&b, "packages");
 
-		for (i = 0; i < ARRAY_SIZE(names); i++) {
+		for (i = 0; i < MESH_PKG_COUNT; i++) {
 			struct mesh_pkg_meta meta;
 			char have[MESH_WORD_MAX * 3];
 			bool outdated;
 			void *t;
 
-			if (!mesh_sys_installed(names[i], have, sizeof(have)))
+			if (!mesh_sys_installed(mesh_pkg_names[i], have, sizeof(have)))
 				continue;
 
-			if (!mesh_pkg_known(job->branch, job->arch, names[i], &meta))
+			if (!mesh_pkg_known(job->branch, job->arch, mesh_pkg_names[i], &meta))
 				snprintf(meta.version, sizeof(meta.version), "%s", have);
 
 			outdated = mesh_pkg_newer(have, meta.version) > 0;
 			update |= outdated;
 
 			t = blobmsg_open_table(&b, NULL);
-			blobmsg_add_string(&b, "name", names[i]);
+			blobmsg_add_string(&b, "name", mesh_pkg_names[i]);
 			blobmsg_add_string(&b, "installed", have);
 			blobmsg_add_string(&b, "available", meta.version);
 			blobmsg_add_u8(&b, "outdated", outdated);
@@ -226,7 +247,6 @@ bool mesh_self_check_busy(void)
 
 void mesh_self_check(void)
 {
-	static const char *const names[] = { MESH_PKG_MAIN, MESH_PKG_UI };
 	struct self_job *job;
 	size_t i;
 
@@ -247,15 +267,15 @@ void mesh_self_check(void)
 	self_job = job;
 	job->pending = 1;
 
-	for (i = 0; i < ARRAY_SIZE(names); i++) {
+	for (i = 0; i < MESH_PKG_COUNT; i++) {
 		char have[MESH_WORD_MAX * 3];
 
-		if (!mesh_sys_installed(names[i], have, sizeof(have)))
+		if (!mesh_sys_installed(mesh_pkg_names[i], have, sizeof(have)))
 			continue;
 
 		job->pending++;
 
-		if (!mesh_pkg_refresh(job->branch, job->arch, names[i], selfcheck_ready, job)) {
+		if (!mesh_pkg_refresh(job->branch, job->arch, mesh_pkg_names[i], selfcheck_ready, job)) {
 			job->pending--;
 			job->failed = true;
 		}
@@ -326,7 +346,6 @@ static bool self_outdated(const char *branch, const char *arch, const char *name
 
 int mesh_self_update(const char *task)
 {
-	static const char *const names[] = { MESH_PKG_MAIN, MESH_PKG_UI };
 	char branch[MESH_WORD_MAX], arch[MESH_ARCH_MAX], have[MESH_WORD_MAX * 3];
 	bool installed = false;
 	size_t i;
@@ -340,11 +359,11 @@ int mesh_self_update(const char *task)
 		return 1;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(names); i++) {
-		if (!self_outdated(branch, arch, names[i], have, sizeof(have)))
+	for (i = 0; i < MESH_PKG_COUNT; i++) {
+		if (!self_outdated(branch, arch, mesh_pkg_names[i], have, sizeof(have)))
 			continue;
 
-		if (!self_install(branch, arch, names[i])) {
+		if (!self_install(branch, arch, mesh_pkg_names[i])) {
 			mesh_task_report(task, "update", "error", "package installation failed");
 
 			return 1;
@@ -405,18 +424,20 @@ int mesh_update_nodes(const char *task, bool updated)
 
 	uci_session_close(&u);
 
-	if (updated) {
+	if (failed) {
+		record_result("error");
+		mesh_task_report(task, "done", "error",
+				 updated ? "some nodes were not updated"
+					 : "the nodes were not updated");
+	} else if (updated) {
 		record_result("updated");
 		mesh_task_report(task, "done", "ok", "update installed");
-	} else if (failed) {
-		record_result("error");
-		mesh_task_report(task, "done", "error", "some nodes were not updated");
 	} else {
 		record_result("none");
 		mesh_task_report(task, "done", "ok", "no updates");
 	}
 
-	return failed && !updated ? 1 : 0;
+	return failed ? 1 : 0;
 }
 
 int mesh_node_update_task(const char *addr, const char *task)
@@ -465,7 +486,6 @@ int mesh_node_update_task(const char *addr, const char *task)
 int mesh_autoupdate_task(const char *phase, const char *task)
 {
 	char branch[MESH_WORD_MAX], arch[MESH_ARCH_MAX], have[MESH_WORD_MAX * 3];
-	static const char *const names[] = { MESH_PKG_MAIN, MESH_PKG_UI };
 	bool updated = false;
 	size_t i;
 
@@ -482,15 +502,15 @@ int mesh_autoupdate_task(const char *phase, const char *task)
 		return 1;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(names); i++) {
-		if (!self_outdated(branch, arch, names[i], have, sizeof(have)))
+	for (i = 0; i < MESH_PKG_COUNT; i++) {
+		if (!self_outdated(branch, arch, mesh_pkg_names[i], have, sizeof(have)))
 			continue;
 
 		if (!updated)
 			mesh_task_report(task, "update", "progress",
 					 "installing packages on the controller");
 
-		if (!self_install(branch, arch, names[i])) {
+		if (!self_install(branch, arch, mesh_pkg_names[i])) {
 			mesh_task_report(task, "update", "error", "package installation failed");
 
 			return 1;

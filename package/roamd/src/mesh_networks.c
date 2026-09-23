@@ -38,6 +38,20 @@ static uint8_t band_of(struct uci_context *ctx, struct uci_section *s)
 	return MESH_BAND_24;
 }
 
+uint8_t mesh_radio_band(struct uci_context *ctx, struct uci_package *pkg, const char *device)
+{
+	struct uci_section *s;
+
+	if (!device)
+		return 0;
+
+	s = uci_lookup_section(ctx, pkg, device);
+	if (!s || strcmp(s->type, "wifi-device"))
+		return 0;
+
+	return band_of(ctx, s);
+}
+
 static unsigned int radios_collect(struct uci_session *u, struct net_radio *out, unsigned int max)
 {
 	struct uci_element *e;
@@ -529,22 +543,32 @@ bool mesh_network_flag(const char *ssid, bool roaming)
 	return true;
 }
 
-static bool iface_wanted(const char *name)
+static void iface_name(char *out, size_t len, const struct mesh_network *n, const char *radio)
 {
-	unsigned int i;
+	snprintf(out, len, NET_SECTION "%.4s_%.11s", n->id, radio);
+}
+
+static bool iface_wanted(const char *name, const struct net_radio *radios, unsigned int nradios)
+{
+	unsigned int i, r;
 
 	if (strncmp(name, NET_SECTION, strlen(NET_SECTION)))
 		return false;
 
 	for (i = 0; i < nets_n; i++) {
-		char want[40];
-
 		if (nets[i].segment && !mesh_seg_usable(nets[i].vid))
 			continue;
 
-		snprintf(want, sizeof(want), NET_SECTION "%.4s_", nets[i].id);
-		if (!strncmp(name, want, strlen(want)))
-			return true;
+		for (r = 0; r < nradios; r++) {
+			char want[40];
+
+			if (!(nets[i].bands & radios[r].band))
+				continue;
+
+			iface_name(want, sizeof(want), &nets[i], radios[r].name);
+			if (!strcmp(name, want))
+				return true;
+		}
 	}
 
 	return false;
@@ -576,7 +600,7 @@ bool mesh_networks_apply(struct blob_attr *networks)
 		if (strcmp(s->type, "wifi-device")) {
 			if (!mode || strcmp(mode, "ap") ||
 			    !strncmp(s->e.name, MESH_BH_PREFIX, strlen(MESH_BH_PREFIX)) ||
-			    iface_wanted(s->e.name))
+			    iface_wanted(s->e.name, radios, nradios))
 				continue;
 
 			uci_session_delete(&u, s->e.name, NULL);
@@ -599,7 +623,7 @@ bool mesh_networks_apply(struct blob_attr *networks)
 			if (!(n->bands & radios[r].band))
 				continue;
 
-			snprintf(name, sizeof(name), NET_SECTION "%.4s_%.11s", n->id, radios[r].name);
+			iface_name(name, sizeof(name), n, radios[r].name);
 			if (!uci_session_add(&u, "wifi-iface", name))
 				continue;
 

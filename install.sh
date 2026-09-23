@@ -137,20 +137,36 @@ pkg_update() {
 	fi
 }
 
-pkg_install() {
-	if [ "$PKG_IS_APK" -eq 1 ]; then
-		apk add "$@"
-	else
-		opkg install "$@"
-	fi
-}
-
 pkg_installed() {
 	if [ "$PKG_IS_APK" -eq 1 ]; then
 		apk list --installed 2>/dev/null | grep -q "^$1-[0-9]"
 	else
 		opkg list-installed 2>/dev/null | grep -q "^$1 "
 	fi
+}
+
+pkg_version() {
+	if [ "$PKG_IS_APK" -eq 1 ]; then
+		apk list --installed 2>/dev/null | sed -n "s/^$1-\\([0-9][^ ]*\\) .*/\\1/p" | head -1
+	else
+		opkg list-installed 2>/dev/null | sed -n "s/^$1 - \\(.*\\)$/\\1/p" | head -1
+	fi
+}
+
+pkg_apply() {
+	for p in "$@"; do
+		if pkg_installed "$p"; then
+			if [ "$PKG_IS_APK" -eq 1 ]; then
+				apk upgrade "$p" || return 1
+			else
+				opkg upgrade "$p" || return 1
+			fi
+		elif [ "$PKG_IS_APK" -eq 1 ]; then
+			apk add "$p" || return 1
+		else
+			opkg install "$p" || return 1
+		fi
+	done
 }
 
 check_conflicts() {
@@ -195,8 +211,10 @@ main() {
 
 	pkg_update || { err "Не удалось обновить список пакетов"; exit 1; }
 
-	if pkg_installed roamd; then
-		msg "roamd уже установлен — обновляем"
+	had=$(pkg_version roamd)
+
+	if [ -n "$had" ]; then
+		msg "roamd уже установлен ($had) — проверяем обновление"
 	else
 		msg "Устанавливаем roamd"
 	fi
@@ -204,12 +222,20 @@ main() {
 	ask_ru && PACKAGES="$PACKAGES $PACKAGES_RU"
 
 	# shellcheck disable=SC2086
-	pkg_install $PACKAGES || { err "Установка не удалась"; exit 1; }
+	pkg_apply $PACKAGES || { err "Установка не удалась"; exit 1; }
+
+	now=$(pkg_version roamd)
 
 	/etc/init.d/roamd enable >/dev/null 2>&1
 	/etc/init.d/roamd restart >/dev/null 2>&1
 
-	msg "Готово. Откройте LuCI → Сеть → Роуминг Wi-Fi"
+	if [ -z "$had" ]; then
+		msg "Установлен roamd $now. Откройте LuCI → Сеть → Роуминг Wi-Fi"
+	elif [ "$had" = "$now" ]; then
+		msg "Уже установлена последняя версия $now, обновлять нечего"
+	else
+		msg "Обновлено: $had → $now. Откройте LuCI → Сеть → Роуминг Wi-Fi"
+	fi
 	msg "Обновления: повторный запуск этого скрипта или $([ "$PKG_IS_APK" -eq 1 ] && echo 'apk upgrade roamd' || echo 'opkg upgrade roamd')"
 }
 

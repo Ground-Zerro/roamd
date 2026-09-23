@@ -49,7 +49,7 @@ static struct rpc_session sessions[MESH_ALLOW_MAX];
 
 static struct rpc_session *session_slot(const char *id, bool create)
 {
-	struct rpc_session *free_slot = NULL;
+	struct rpc_session *free_slot = NULL, *oldest = &sessions[0];
 	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(sessions); i++) {
@@ -58,10 +58,16 @@ static struct rpc_session *session_slot(const char *id, bool create)
 
 		if (!free_slot && !sessions[i].id[0])
 			free_slot = &sessions[i];
+
+		if (sessions[i].taken < oldest->taken)
+			oldest = &sessions[i];
 	}
 
-	if (!create || !free_slot)
+	if (!create)
 		return NULL;
+
+	if (!free_slot)
+		free_slot = oldest;
 
 	snprintf(free_slot->id, sizeof(free_slot->id), "%s", id);
 	free_slot->sid[0] = 0;
@@ -249,12 +255,19 @@ static void cb_read(struct uclient *cl)
 	while ((len = uclient_read(cl, buf, sizeof(buf))) > 0) {
 		char *grown;
 
-		if (r->resp_len + len + 1 > RPC_RESP_MAX)
+		if (r->resp_len + len + 1 > RPC_RESP_MAX) {
+			roam_log(ROAM_L_ERR, "mesh: response from %s too large (%zu bytes)",
+				 r->id, r->resp_len + len);
+			req_done(r, NULL, false);
 			return;
+		}
 
 		grown = realloc(r->resp, r->resp_len + len + 1);
-		if (!grown)
+		if (!grown) {
+			roam_log(ROAM_L_ERR, "mesh: realloc failed for %s", r->id);
+			req_done(r, NULL, false);
 			return;
+		}
 
 		r->resp = grown;
 		memcpy(r->resp + r->resp_len, buf, len);

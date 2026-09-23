@@ -253,27 +253,6 @@ static const struct br_port *port_of_mac(const struct br_view *v, const uint8_t 
 	return NULL;
 }
 
-const char *mesh_bridge_member_behind(const uint8_t *mac)
-{
-	struct br_view v;
-	DIR *d = opendir(BR_SYS);
-	const char *owner = NULL;
-
-	if (!d)
-		return NULL;
-
-	while (!owner && br_next(d, &v)) {
-		const struct br_port *p = port_of_mac(&v, mac);
-
-		if (p)
-			owner = member_on_port(&v, p);
-	}
-
-	closedir(d);
-
-	return owner;
-}
-
 void mesh_wired_collect(struct mesh_assoc_idx *idx, const uint8_t *parent)
 {
 	struct br_view v;
@@ -461,30 +440,45 @@ bool mesh_bridge_carrier(const char *ifname)
 	return sys_num(ifname, "carrier") == 1;
 }
 
-bool mesh_bridge_sta_name(char *out, size_t len)
+static int sta_find(char *out, size_t len, bool need_up)
 {
 	DIR *d = opendir(BR_SYS);
 	struct dirent *de;
 	char state[16];
-	bool up = false;
+	int found = 0;
+	long idx;
 
 	if (!d)
-		return false;
+		return 0;
 
-	while (!up && (de = readdir(d))) {
-		if (!strstr(de->d_name, "-sta") || !sys_flag(de->d_name, "phy80211") ||
-		    !sys_line(de->d_name, "operstate", state, sizeof(state)) || strcmp(state, "up"))
+	while (!found && (de = readdir(d))) {
+		if (!strstr(de->d_name, "-sta") || !sys_flag(de->d_name, "phy80211"))
+			continue;
+
+		if (need_up && (!sys_line(de->d_name, "operstate", state, sizeof(state)) ||
+				strcmp(state, "up")))
 			continue;
 
 		if (out)
 			snprintf(out, len, "%s", de->d_name);
 
-		up = true;
+		idx = sys_num(de->d_name, "ifindex");
+		found = idx > 0 ? (int)idx : 1;
 	}
 
 	closedir(d);
 
-	return up;
+	return found;
+}
+
+bool mesh_bridge_sta_name(char *out, size_t len)
+{
+	return sta_find(out, len, true) > 0;
+}
+
+int mesh_bridge_sta_ifindex(void)
+{
+	return sta_find(NULL, 0, false);
 }
 
 bool mesh_bridge_sta_up(void)

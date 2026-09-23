@@ -4,7 +4,7 @@ LUCI_TITLE:=Wi-Fi roaming configuration
 LUCI_DEPENDS:=+luci-base +roamd
 LUCI_PKGARCH:=all
 
-PKG_VERSION:=1.1.0-r1
+PKG_VERSION:=1.2.0-r1
 PKG_PO_VERSION:=$(PKG_VERSION)
 PKG_RELEASE:=
 PKG_LICENSE:=Apache-2.0

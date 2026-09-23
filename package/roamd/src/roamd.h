@@ -56,11 +56,24 @@ enum roam_lock {
 	LOCK_HIGH
 };
 
+enum roam_admit {
+	ADMIT_OK,
+	ADMIT_DENY_NODE,
+	ADMIT_DENY_BAND
+};
+
 enum roam_event {
 	EVENT_PROBE,
 	EVENT_AUTH,
 	EVENT_ASSOC,
 	EVENT_MAX
+};
+
+enum roam_bss_query {
+	BSS_QUERY_STATUS,
+	BSS_QUERY_CLIENTS,
+	BSS_QUERY_NR,
+	__BSS_QUERY_MAX
 };
 
 struct roam_config {
@@ -79,8 +92,8 @@ struct roam_config {
 	int rssi_low;
 	int rssi_good;
 	int rssi_diff;
+	int node_rssi_diff;
 	int kick_rssi;
-	int cross_band_delta;
 
 	uint32_t hold_time;
 	uint32_t age_time;
@@ -115,6 +128,9 @@ struct roam_bss {
 
 	uint32_t pair_issues;
 	struct roam_bss *pair_peer;
+
+	struct ubus_request query[__BSS_QUERY_MAX];
+	uint8_t query_pending;
 };
 
 struct roam_sta_band {
@@ -157,10 +173,12 @@ extern uint64_t roam_now;
 
 void roam_time_update(void);
 const char *roam_band_name(enum roam_band band);
+uint8_t roam_band_bit(enum roam_band band);
 
 void roam_device_setup(void);
 enum roam_lock roam_device_lock(const uint8_t *addr);
-bool roam_device_node_allowed(const uint8_t *addr, const char *node_id);
+enum roam_band roam_locked_band(enum roam_lock lock);
+enum roam_admit roam_admit(const uint8_t *addr, const char *node_id, enum roam_band band);
 void roam_config_load(void);
 void roam_config_dump(struct blob_buf *b);
 bool roam_config_value(const char *name, char *out, size_t len);
@@ -212,6 +230,8 @@ void roam_sta_event(struct roam_bss *bss, const uint8_t *addr, int signal);
 void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int signal);
 void roam_sta_disconnected(struct roam_sta *sta);
 void roam_sta_reset(struct roam_sta *sta);
+int roam_sta_signal(const struct roam_sta *sta, enum roam_band band);
+int roam_sta_signal_seen(const struct roam_sta *sta, enum roam_band band, uint32_t *age);
 
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev);
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from);
@@ -219,12 +239,14 @@ void roam_policy_run(struct roam_bss *bss);
 bool roam_policy_can_steer(const struct roam_sta *sta);
 
 void roam_ubus_object_init(void);
+void roam_ubus_call_local(const char *method, struct blob_attr *msg);
 
 struct mesh_pkg_meta;
 bool apk_index_print(const char *path);
 bool apk_index_meta(const char *path, const char *name, struct mesh_pkg_meta *out);
 bool apk_block_print(const char *path);
 bool apk_block_digest(const char *path, char *hex, size_t len);
+void roam_mac_str(const uint8_t *raw, char *out, size_t len);
 bool roam_sha256_file(const char *path, char *hex, size_t len);
 bool roam_sha256_data(const void *data, size_t size, char *hex, size_t len);
 

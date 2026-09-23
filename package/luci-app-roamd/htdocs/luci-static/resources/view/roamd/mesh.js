@@ -9,12 +9,6 @@
 
 var nodeUiOpen = false;
 
-var callMeshStatus = rpc.declare({
-	object: 'roamd',
-	method: 'mesh_status',
-	expect: { }
-});
-
 var callMeshClients = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_clients',
@@ -52,7 +46,7 @@ var callMeshDiscover = rpc.declare({
 var callMeshAcquire = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_acquire',
-	params: [ 'addr' ],
+	params: [ 'addr', 'reset' ],
 	expect: { }
 });
 
@@ -92,7 +86,7 @@ var callMeshSelfUpdate = rpc.declare({
 var callMeshMemberUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_update',
-	params: [ 'id', 'name', 'band', 'nodes' ],
+	params: [ 'id', 'name', 'nodes' ],
 	expect: { }
 });
 
@@ -124,8 +118,24 @@ var EVENT_TYPE = {
 	disconnect: _('disconnected'),
 	roam: _('roaming'),
 	steer: _('steering'),
-	kick: _('forced disconnect')
+	kick: _('forced disconnect'),
+	'deny-node': _('device not allowed'),
+	'deny-band': _('band not allowed')
 };
+
+var CLIENT_STATE = {
+	online: { color: '#2e9e2e', label: _('online') },
+	unknown: { color: '#e0a800', label: _('node not responding') },
+	offline: { color: '#bbb', label: _('offline') }
+};
+
+function clientState(c) {
+	return CLIENT_STATE[c.state] || CLIENT_STATE.offline;
+}
+
+function clientSeen(c) {
+	return c.state !== 'offline';
+}
 
 var CONS_ICON = { ok: '', degraded: '⚠', broken: '⛔' };
 var ISSUE_TEXT = {
@@ -163,40 +173,26 @@ function nodeTitle(node) {
 
 function nodeLabel(node, band) {
 	var name = nodeTitle(node);
-	return band ? '%s · %s %s'.format(name, band, _('GHz')) : name;
+	return band ? '%s · %s'.format(name, common.bandLabel(band)) : name;
 }
 
 function nodeCell(node, band) {
 	if (!node && !band)
 		return '-';
 
-	return E('div', {}, [
-		E('span', {}, nodeTitle(node)),
-		band ? E('div', {}, E('small', { 'style': 'color:#888' }, '%s %s'.format(band, _('GHz')))) : ''
-	]);
+	return common.twoLine(E('span', {}, nodeTitle(node)), band ? common.bandLabel(band) : '');
 }
 
 function timeCell(ts) {
 	var d = new Date((ts || 0) * 1000);
 
-	return E('div', {}, [
-		E('span', {}, d.toLocaleTimeString()),
-		E('div', {}, E('small', { 'style': 'color:#888' }, d.toLocaleDateString()))
-	]);
+	return common.twoLine(E('span', {}, d.toLocaleTimeString()), d.toLocaleDateString());
 }
 
 var logNames = {};
 
 function clientCell(mac) {
-	var name = logNames[(mac || '').toLowerCase()];
-
-	if (!name)
-		return mac || '';
-
-	return E('div', {}, [
-		E('div', {}, E('strong', {}, name)),
-		E('div', {}, E('small', { 'style': 'color:#888' }, mac))
-	]);
+	return common.macCell(logNames[(mac || '').toLowerCase()], mac);
 }
 
 function logRow(ev) {
@@ -240,7 +236,7 @@ var ACQUIRE_ERR = {
 	no_address: _('No device address given.')
 };
 
-var ACQUIRE_ORDER = [ 'probe', 'install', 'enroll', 'network', 'profile', 'done' ];
+var ACQUIRE_ORDER = [ 'reset', 'probe', 'install', 'enroll', 'network', 'profile', 'done' ];
 
 var ACQUIRE_MSG = [
 	[ /^updating roamd on the node$/, function() { return _('installing roamd on the node'); } ],
@@ -251,6 +247,10 @@ var ACQUIRE_MSG = [
 	[ /^no updates$/, function() { return _('no updates available'); } ],
 	[ /^some nodes were not updated$/, function() { return _('some nodes were not updated'); } ],
 	[ /^node is unreachable$/, function() { return _('the node is unreachable'); } ],
+	[ /^resetting the device to factory settings$/, function() { return _('resetting the device to factory settings'); } ],
+	[ /^waiting for the device to come back after the reset$/, function() { return _('waiting for the device to come back'); } ],
+	[ /^the device is reset to factory settings and back online$/, function() { return _('the device is reset and back online'); } ],
+	[ /^the reset is skipped by the user$/, function() { return _('the reset is skipped by the user'); } ],
 	[ /^unknown OpenWrt version$/, function() { return _('unknown OpenWrt version'); } ],
 	[ /^no package for the OpenWrt version of the node$/, function() { return _('no package for the OpenWrt version of the node'); } ],
 	[ /^package installation failed on the node$/, function() { return _('the package could not be installed on the node'); } ],
@@ -260,7 +260,7 @@ var ACQUIRE_MSG = [
 	[ /^repository unreachable, installed from the controller cache$/, function() { return _('repository unreachable, installed from the cache'); } ],
 	[ /^checking what the node needs from the OpenWrt feeds$/, function() { return _('checking what the node needs from the OpenWrt repositories'); } ],
 	[ /^cannot ask the node which packages it needs$/, function() { return _('the node did not report which packages it needs'); } ],
-	[ /^(\S+) is installed on the device and conflicts with roamd — remove it or reset the device to factory settings$/, function(m) { return _('%s is installed on the device and conflicts with roamd: remove it or reset the device to factory settings').format(m[1]); } ],
+	[ /^(\S+) is part of the device firmware and conflicts with roamd — it cannot be captured$/, function(m) { return _('%s is built into the firmware of this device and conflicts with roamd: such a device cannot become a node').format(m[1]); } ],
 	[ /^the node needs (.+) but has no OpenWrt package feeds — capture stopped before the node was changed$/, function(m) { return _('the node needs %s, but it has no OpenWrt package repositories; capture stopped before any change to the node').format(m[1]); } ],
 	[ /^the node needs (.+) from (\S+), which the controller cannot reach — capture stopped before the node was changed$/, function(m) { return _('the node needs %s from %s, but the controller cannot reach it; capture stopped before any change to the node').format(m[1], m[2]); } ],
 	[ /^the node at (\S+) is still a router \((.+)\) — single subnet not applied$/, function(m) { return _('the node at %s is still a router (%s): the single subnet was not applied').format(m[1], m[2]); } ],
@@ -388,7 +388,7 @@ function discoverDialog() {
 }
 
 var PKG_STATE_TEXT = {
-	conflict: _('%s is installed on the device: it also manages roaming and would interfere with roamd. Remove it or reset the device to factory settings'),
+	conflict: _('%s is installed on the device: it also manages roaming and would interfere with roamd. The factory reset before the capture removes it, unless it is built into the firmware'),
 	missing: _('OpenWrt %s (%s) is not supported: the repository has no roamd package for this version and architecture'),
 	unreachable: _('Could not check for the roamd package for OpenWrt %s (%s): the package repository is unreachable. Check the internet access of the controller and search again')
 };
@@ -403,19 +403,51 @@ function renderCandidate(c) {
 
 	if (!ready)
 		lines.push(E('div', { 'style': 'color:#c33' }, E('small', {},
-			(c.pkg === 'conflict' ? PKG_STATE_TEXT.conflict.format(c.conflict) : PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?')))));
+			PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?'))));
+
+	if (c.conflict)
+		lines.push(E('div', { 'style': 'color:#c60' }, E('small', {},
+			PKG_STATE_TEXT.conflict.format(c.conflict))));
 
 	var action = E('button', {
 		'class': 'btn cbi-button cbi-button-action',
 		'disabled': ready ? null : 'disabled',
-		'click': function(ev) { startAcquire(c.addr, ev.target); }
+		'click': function(ev) { confirmAcquire(c, ev.target); }
 	}, _('Capture'));
 
 	return E('div', { 'class': 'cbi-section', 'style': 'display:flex;justify-content:space-between;align-items:center' },
 		[ E('div', {}, lines), action ]);
 }
 
-function startAcquire(addr, button) {
+function confirmAcquire(c, button) {
+	var label = c.name && c.name !== 'OpenWrt' ? c.name : (c.model || c.addr);
+	var skip = E('input', { 'type': 'checkbox' });
+
+	ui.showModal(_('The device will be reset to factory settings'), [
+		E('p', {}, _('Before capture, %s (%s) is reset to factory settings. Everything configured on it — networks, passwords, packages, firewall rules — is erased.').format(label, c.mac)),
+		E('p', {}, _('This is needed so the node starts from a known state: the controller rolls out the whole configuration itself, and leftovers from previous setups are the usual reason a capture breaks halfway.')),
+		E('p', {}, E('strong', { 'style': 'color:#c33' },
+			_('Do not capture a device that has to keep working as a router: a node has no own network settings, it only broadcasts the networks of the Wi-Fi system.'))),
+		E('p', { 'class': 'cbi-value-description' },
+			_('The device will reboot and come back on its own — that takes a few minutes.')),
+		E('div', { 'class': 'cbi-value' },
+			E('label', {}, [ skip, ' ',
+				_('I understand the risks and want to skip the reset') ])),
+		E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+			' ',
+			E('button', {
+				'class': 'btn cbi-button-negative',
+				'click': function() {
+					ui.hideModal();
+					startAcquire(c.addr, button, !skip.checked);
+				}
+			}, _('Continue'))
+		])
+	]);
+}
+
+function startAcquire(addr, button, reset) {
 	var body = E('div', {}, [ E('p', { 'class': 'spinning' }, _('Capturing %s…').format(addr)) ]);
 
 	if (button)
@@ -423,7 +455,7 @@ function startAcquire(addr, button) {
 
 	ui.showModal(_('Capturing the node'), [ body ]);
 
-	callMeshAcquire(addr).then(function(res) {
+	callMeshAcquire(addr, reset === false ? '0' : '1').then(function(res) {
 		res = res || {};
 
 		if (res.error && !res.task_id) {
@@ -444,7 +476,7 @@ function startAcquire(addr, button) {
 function acquireProgress(steps, kind) {
 	var state = {};
 	var first = steps.length ? steps[0].step : null;
-	var order = (kind === 'release' || first === 'reset') ? [ 'reset', 'done' ]
+	var order = kind === 'release' ? [ 'reset', 'done' ]
 		: (kind === 'autoupdate' || first === 'check') ? [ 'check', 'update', 'done' ]
 		: (kind === 'update' || kind === 'selfupdate' || first === 'update') ? [ 'update', 'done' ]
 		: ACQUIRE_ORDER.slice();
@@ -514,8 +546,11 @@ function pollAcquire(task, body, misses, kind) {
 		if (res.running) {
 			dom.content(body, [
 				E('div', {}, acquireProgress(steps, kind)),
-				E('p', { 'class': 'spinning' },
-					_('The operation is running, it takes a few minutes. You can close this window — the process continues.')),
+				E('div', { 'class': 'spinning', 'style': 'margin:1em 0' }, [
+					_('The operation is running, it takes a few minutes.'),
+					E('br'),
+					_('You can close this window — the process continues.')
+				]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			window.setTimeout(function() { pollAcquire(task, body, 0, kind); }, 2000);
@@ -535,12 +570,16 @@ function pollAcquire(task, body, misses, kind) {
 
 function renderNodes(state) {
 	var intro = E('div', {}, [
-		E('p', {}, _('This device works as the Mesh Wi-Fi system controller. Add other OpenWrt devices to build one wireless system with central management and monitoring.')),
-		E('p', {}, _('To add a node: reset the new device to factory settings and make sure it has no administrator password.')),
-		E('p', {}, E('strong', { 'style': 'color:#c33' },
-			_('Connect a LAN port of the controller to a LAN port of the new device — not to its WAN port.'))),
-		E('p', {}, _('Then press "Add a new node" and capture the device that appears.')),
-		E('p', { 'class': 'cbi-value-description' }, _('If the device is not found or the capture does not finish, reset it to factory settings and try again.'))
+		E('p', {}, _('This device works as the Mesh Wi-Fi system controller.')),
+		E('p', {}, _('Add other OpenWrt devices to build one wireless system with central management and monitoring.')),
+		E('div', { 'style': 'border:1px solid #ccc;padding:8px;margin:8px 0;background:#f9f9f9' }, [
+			E('p', { 'style': 'margin:0 0 4px 0' }, _('To add a node: reset the new device to factory settings and make sure it has no administrator password.')),
+			E('p', { 'style': 'margin:4px 0' }, E('strong', { 'style': 'color:#c33' },
+				_('Connect a LAN port of the controller to a LAN port of the new device — not to its WAN port.'))),
+			E('p', { 'style': 'margin:4px 0 0 0' }, _('Then press "Add a new node" and capture the device that appears.'))
+		]),
+		E('p', { 'class': 'cbi-value-description' }, _('The controller needs root access to the device: SSH on port 22 without a password and, if the device has LuCI, port 80 open. Firmware where the root login is disabled or password-protected cannot be captured.')),
+		E('p', {}, '')
 	]);
 
 	var deps = state.deps_ready ? '' : E('div', { 'class': 'alert-message warning' }, [
@@ -616,7 +655,7 @@ function connectionCell(m) {
 		return m.connection === 'wired' ? _('Cable') : '-';
 
 	var head = m.uplink_band
-		? '%s %s %s'.format(_('Wi-Fi'), m.uplink_band, _('GHz'))
+		? '%s %s'.format(_('Wi-Fi'), common.bandLabel(m.uplink_band))
 		: _('Wi-Fi');
 
 	if (m.uplink_signal)
@@ -633,7 +672,7 @@ function connectionCell(m) {
 
 	return E('div', { 'style': 'white-space:nowrap' }, [
 		E('div', {}, head),
-		parts.length ? E('div', {}, E('small', { 'style': 'color:#888' }, parts.join(' '))) : ''
+		common.note(parts.join(' '))
 	]);
 }
 
@@ -690,18 +729,14 @@ function controllerDialog(state) {
 		]),
 		E('h4', {}, _('Details')),
 		E('div', {}, info),
-		actions.length ? E('div', { 'style': 'margin-top:1em' }, actions) : '',
-		E('div', { 'class': 'right' }, buttons)
+		common.dialogFooter(actions, buttons)
 	]);
 }
 
 function controllerRow(state) {
 	var self = state.self || {};
 	var name = state.controller_name || self.hostname || _('This device');
-	var cell = E('div', {}, [
-		E('div', {}, E('strong', {}, name)),
-		E('div', {}, E('small', { 'style': 'color:#888' }, _('controller')))
-	]);
+	var cell = common.twoLine(E('strong', {}, name), _('controller'));
 	var check = E('button', {
 		'class': 'btn cbi-button',
 		'click': function() { controllerDialog(state); }
@@ -710,7 +745,7 @@ function controllerRow(state) {
 	return [ cell, state.controller_clients || 0,
 		E('span', { 'style': 'color:#2e9e2e', 'title': _('this device') }, '●'),
 		self.uptime ? '%t'.format(self.uptime) : '-',
-		'—', _('this device'), check ];
+		'—', '—', check ];
 }
 
 function checkSelfUpdate() {
@@ -801,14 +836,11 @@ function nameCell(m) {
 		'style': 'text-decoration:none;margin-left:.4em'
 	}, '🌐') : '';
 
-	return E('div', {}, [
-		E('div', {}, [ E('strong', {}, alias), link ]),
-		sys ? E('div', {}, E('small', { 'style': 'color:#888' }, sys)) : ''
-	]);
+	return common.twoLine(E('div', {}, [ E('strong', {}, alias), link ]), sys);
 }
 
 function refreshNodes() {
-	return callMeshStatus().then(function(fresh) {
+	return common.meshStatus().then(function(fresh) {
 		var pane = document.getElementById('mesh-nodes-pane');
 
 		fresh = fresh || {};
@@ -954,7 +986,9 @@ function renderLog() {
 		E('option', { 'value': 'steer' }, _('steering')),
 		E('option', { 'value': 'connect' }, _('connected')),
 		E('option', { 'value': 'disconnect' }, _('disconnected')),
-		E('option', { 'value': 'kick' }, _('forced disconnect'))
+		E('option', { 'value': 'kick' }, _('forced disconnect')),
+		E('option', { 'value': 'deny-node' }, _('device not allowed')),
+		E('option', { 'value': 'deny-band' }, _('band not allowed'))
 	]);
 
 	var bar = E('div', { 'style': 'display:flex;gap:.5em;align-items:center;margin-bottom:.5em;flex-wrap:wrap' }, [
@@ -1117,6 +1151,16 @@ function nodeChips(allNodes, allowed) {
 	};
 }
 
+var SIGNAL_FRESH = 90;
+
+function signalLine(band, signal, age) {
+	if (!signal)
+		return '';
+
+	return E('div', { 'style': (age || 0) > SIGNAL_FRESH ? 'color:#999' : '' },
+		'%s — %d %s'.format(common.bandLabel(band), signal, _('dBm')));
+}
+
 function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 	var mac = c.mac.toLowerCase();
 	var saved = ov[mac] || { band: 'both', alias: '', nodes: [] };
@@ -1131,7 +1175,7 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 	var bands = bandChoice(saved.band);
 	var chips = nodeChips(allNodes, saved.nodes);
 	var ip4 = hintIp4(hints, c.mac);
-	var conn = !c.online ? _('offline')
+	var conn = !clientSeen(c) ? _('offline')
 		: c.wired ? _('Cable') : _('Wi-Fi %s GHz').format(c.band || '?');
 	var info = [
 		infoRow(_('Device name'), sysName || '—'),
@@ -1141,6 +1185,11 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 
 	if (ip4)
 		info.push(infoRow(_('IP address'), ip4));
+	if (c.signal_24 || c.signal_5)
+		info.push(infoRow(_('Signal'), E('div', {}, [
+			signalLine('2.4', c.signal_24, c.signal_24_age),
+			signalLine('5', c.signal_5, c.signal_5_age)
+		])));
 	if (c.rate)
 		info.push(infoRow(_('Rate'), '%d %s'.format(Math.round(c.rate / 1000), _('Mbit/s'))));
 	if (c.rx_bytes || c.tx_bytes) {
@@ -1178,6 +1227,14 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		]),
 		c.wired ? '' : E('h4', {}, _('Wi-Fi bands allowed for this device')),
 		c.wired ? '' : E('div', { 'class': 'cbi-value' }, bands),
+		c.band_lock && !c.band_lock_active
+			? E('div', { 'class': 'alert-message warning' },
+				_('The rule is not in effect: the Wi-Fi system has no access points in this band.'))
+			: '',
+		c.no_place && c.band_lock_active
+			? E('div', { 'class': 'alert-message warning' },
+				_('The rule is in effect, but no access point of the Wi-Fi system is allowed for this device right now.'))
+			: '',
 		c.wired ? '' : E('h4', {}, _('Wi-Fi system nodes allowed for this device')),
 		c.wired ? '' : E('div', { 'class': 'cbi-value' }, chips.widget),
 		readOnly || c.wired ? '' : E('div', { 'class': 'cbi-value' }, E('button', {
@@ -1202,7 +1259,6 @@ function nodeDialog(m, state, refresh) {
 		'placeholder': m.hostname || m.id,
 		'disabled': readOnly ? 'disabled' : null
 	});
-	var bands = bandChoice(m.bh_band === '2.4' ? '2' : (m.bh_band === '5' ? '5' : 'both'));
 	var parents = (state.members || [])
 		.filter(function(o) { return o.id !== m.id; })
 		.map(function(o) { return { id: o.id, label: o.name || o.hostname || o.id }; });
@@ -1236,24 +1292,19 @@ function nodeDialog(m, state, refresh) {
 		info.push(infoRow(_('Segment'), m.seg_issue));
 
 	function save() {
-		var band = bands.filter(function(l) { return l.firstChild.checked; })
-			.map(function(l) { return l.firstChild.value; })[0] || 'both';
-
 		ui.hideModal();
-		callMeshMemberUpdate(m.id, nameInput.value, band === '2' ? '2.4' : band,
-			chips.value()).then(refresh);
+		callMeshMemberUpdate(m.id, nameInput.value, chips.value()).then(refresh);
 	}
 
 	var busy = state.acquire && state.acquire.running;
 	var actions = readOnly ? [] : [
-		E('button', {
+		m.update_available ? E('button', {
 			'class': 'btn cbi-button-apply',
 			'style': 'margin-right:.4em',
-			'disabled': m.update_available && !busy ? null : 'disabled',
-			'title': busy ? _('another task is running')
-				: (m.update_available ? _('update available') : _('no updates available')),
+			'disabled': busy ? 'disabled' : null,
+			'title': busy ? _('another task is running') : _('update available'),
 			'click': function() { ui.hideModal(); updateMember(m.id, m.name); }
-		}, _('Update')),
+		}, _('Update')) : '',
 		E('button', {
 			'class': 'btn cbi-button-remove',
 			'click': function() { ui.hideModal(); removeMember(m.id, m.name); }
@@ -1278,21 +1329,22 @@ function nodeDialog(m, state, refresh) {
 		E('h4', {}, _('Wireless uplink of this node')),
 		E('p', { 'class': 'cbi-value-description' },
 			_('Applies to the wireless link only. A cable uplink is always allowed and is always preferred.')),
-		E('div', { 'class': 'cbi-value' }, bands),
 		E('div', { 'class': 'cbi-value' }, chips.widget),
+		m.bh_nodes_void
+			? E('div', { 'class': 'alert-message warning' },
+				_('None of the allowed devices is reachable for this node, so the limit is not applied.'))
+			: '',
 		readOnly ? '' : E('div', { 'class': 'cbi-value' }, E('button', {
 			'class': 'btn',
 			'click': function(ev) {
 				ev.preventDefault();
 				chips.reset();
-				bands.forEach(function(l) { l.firstChild.checked = l.firstChild.value === 'both'; });
 			}
-		}, _('Allow any device and band'))),
+		}, _('Allow any device'))),
 
 		E('h4', {}, _('Details')),
 		E('div', {}, info),
-		actions.length ? E('div', { 'style': 'margin-top:1em' }, actions) : '',
-		E('div', { 'class': 'right' }, buttons)
+		common.dialogFooter(actions, buttons)
 	]);
 }
 
@@ -1309,13 +1361,9 @@ function clientNameCell(c, hints, ov, nodeName) {
 	var alias = common.clientLabel(hints, ov, c.mac) || c.host || c.mac;
 	var dot = E('span', {
 		'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%%;margin-right:.5em;background:%s'
-			.format(c.online ? '#2e9e2e' : '#bbb')
+			.format(clientState(c).color)
 	});
 	var lines = [ E('div', {}, [ dot, E('strong', {}, alias) ]) ];
-
-	if (c.online)
-		lines.push(E('div', {}, E('small', { 'style': 'color:#888' },
-			_('via %s').format(viaNodeLabel(c, nodeName)))));
 
 	return E('div', {}, lines);
 }
@@ -1323,17 +1371,17 @@ function clientNameCell(c, hints, ov, nodeName) {
 function addrCell(c, hints) {
 	var lines = [];
 
-	if (c.online) {
+	if (clientSeen(c)) {
 		var ip4 = hintIp4(hints, c.mac);
 
 		if (ip4)
 			lines.push(E('div', {}, ip4));
 		hintIp6(hints, c.mac).forEach(function(a) {
-			lines.push(E('div', {}, E('small', { 'style': 'color:#2196a5' }, a)));
+			lines.push(common.note(a, '#2196a5'));
 		});
 	}
 
-	lines.push(E('div', {}, E('small', { 'style': 'color:#888' }, c.mac)));
+	lines.push(common.note(c.mac));
 
 	return E('div', {}, lines);
 }
@@ -1342,27 +1390,22 @@ function connCell(c, ov) {
 	var mac = c.mac.toLowerCase();
 	var lock = (ov[mac] && ov[mac].band) || 'both';
 
-	if (c.wired)
-		return E('div', {}, [
-			E('span', {}, _('Cable')),
-			c.online ? '' : E('div', {}, E('small', { 'style': 'color:#888' }, _('offline')))
-		]);
+	var state = clientState(c);
+	var status = c.state === 'online' ? '' : common.note(state.label, state.color);
 
-	if (!c.online)
-		return E('div', {}, [
-			E('span', {}, bandLockLabel(lock)),
-			E('div', {}, E('small', { 'style': 'color:#888' }, _('offline')))
-		]);
+	if (c.wired)
+		return E('div', {}, [ E('span', {}, _('Cable')), status ]);
 
 	return E('div', {}, [
 		E('span', {}, bandLockLabel(lock)),
-		E('div', {}, E('small', { 'style': 'color:#888' },
-			_('Wi-Fi %s GHz').format(c.band || '?')))
+		clientSeen(c) ? common.note(_('Wi-Fi %s GHz').format(c.band || '?')) : '',
+		status,
+		c.no_place ? common.note(_('no allowed access point'), '#c44') : ''
 	]);
 }
 
 function paramCell(c) {
-	if (!c.online || !c.rate)
+	if (!clientSeen(c) || !c.rate)
 		return '—';
 
 	var phy = c.std || '';
@@ -1371,15 +1414,14 @@ function paramCell(c) {
 	if (c.width)
 		phy += ' %d %s'.format(c.width, _('MHz'));
 
-	return E('div', {}, [
-		E('div', {}, [ E('strong', {}, '%d %s'.format(Math.round(c.rate / 1000), _('Mbit/s'))),
-			c.encryption ? ' ' + c.encryption : '' ]),
-		phy ? E('div', {}, E('small', { 'style': 'color:#888' }, phy)) : ''
-	]);
+	return common.twoLine(E('div', {}, [
+		E('strong', {}, '%d %s'.format(Math.round(c.rate / 1000), _('Mbit/s'))),
+		c.encryption ? ' ' + c.encryption : ''
+	]), phy);
 }
 
 function trafficCell(c) {
-	if (!c.online || (!c.rx_bytes && !c.tx_bytes))
+	if (!clientSeen(c) || (!c.rx_bytes && !c.tx_bytes))
 		return '—';
 
 	return E('div', {}, [
@@ -1396,6 +1438,7 @@ function clientRow(c, hints, ov, nodeName, allNodes, refresh) {
 
 	return [
 		clientNameCell(c, hints, ov, nodeName),
+		clientSeen(c) ? viaNodeLabel(c, nodeName) : '—',
 		addrCell(c, hints),
 		connCell(c, ov),
 		paramCell(c),
@@ -1425,6 +1468,7 @@ function clientTable(caption) {
 	var table = E('table', { 'class': 'table cbi-section-table' }, [
 		E('tr', { 'class': 'tr table-titles' }, [
 			E('th', { 'class': 'th' }, _('Client')),
+			E('th', { 'class': 'th' }, _('Through node')),
 			E('th', { 'class': 'th' }, _('Address')),
 			E('th', { 'class': 'th' }, _('Connection')),
 			E('th', { 'class': 'th' }, _('Parameters')),
@@ -1471,7 +1515,7 @@ function renderClients(state) {
 				if (service[mac])
 					return;
 
-				(c.online ? up : down).push(clientRow(c, hints, ov, nodeName, allNodes, refresh));
+				(clientSeen(c) ? up : down).push(clientRow(c, hints, ov, nodeName, allNodes, refresh));
 			});
 
 			cbi_update_table(online.table, up, E('em', {}, _('No clients online')));
@@ -1502,7 +1546,7 @@ var AUTO_UNITS = [
 var AUTO_RESULT = {
 	updated: _('updated'),
 	none: _('no updates'),
-	error: _('the check failed')
+	error: _('the update failed')
 };
 
 function lastCheckText(state) {
@@ -1527,9 +1571,9 @@ function bandsLabel(bands) {
 	var list = [];
 
 	if (bands & 1)
-		list.push('2.4 ' + _('GHz'));
+		list.push(common.bandLabel('2.4'));
 	if (bands & 2)
-		list.push('5 ' + _('GHz'));
+		list.push(common.bandLabel('5'));
 
 	return list.length ? list.join(', ') : '—';
 }
@@ -1676,7 +1720,7 @@ function renderSettings(state) {
 	function backhaulBands(s) {
 		var ssid = s.backhaul_ssid || '';
 		var bands = (s.self_aps || []).filter(function(ap) { return ap.ssid === ssid; })
-			.map(function(ap) { return '%s %s'.format(ap.band, _('GHz')); });
+			.map(function(ap) { return common.bandLabel(ap.band); });
 
 		return bands.length ? bands.join(', ') : _('not broadcasting');
 	}
@@ -1835,17 +1879,15 @@ function renderSettings(state) {
 			E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Broadcast on bands')),
 			bandsField
 		]),
-		number('backhaul_delta', _('5 GHz advantage for the node link'),
-			_('dB. A node bringing up its wireless link picks 5 GHz if its signal is weaker than 2.4 GHz by no more than this value.'), 0, 40),
-		number('backhaul_min_signal', _('Minimum signal for the node link'),
-			_('dBm. A weaker link is used only when nothing stronger is heard: 5 GHz gives way to 2.4 GHz, and a parent closer to the controller gives way to a stronger one.'), -95, -40),
+		number('backhaul_delta', _('5 GHz allowance'),
+			_('dB. How much weaker than 2.4 GHz the 5 GHz signal may be and still be chosen.'), 0, 40),
+		number('backhaul_min_signal', _('Minimum link signal'),
+			_('dBm. Below this level 5 GHz is not chosen.'), -95, -40),
 		text('backhaul_ssid', _('Backhaul network name')),
 		text('backhaul_key', _('Backhaul key'), null, true),
 
-		E('h3', {}, _('Node web interface')),
+		E('h3', {}, _('Node behaviour')),
 		nodeUiRow,
-
-		E('h3', {}, _('Wi-Fi operation mode')),
 		toggle('wifi_shutdown', _('Turn off node access points when the controller is unreachable'),
 			_('Nodes stop broadcasting the Wi-Fi network while the controller is not available.')),
 
@@ -1893,7 +1935,7 @@ function renderController(state) {
 
 return view.extend({
 	load: function() {
-		return callMeshStatus().catch(function() { return {}; });
+		return common.meshStatus().catch(function() { return {}; });
 	},
 
 	render: function(state) {

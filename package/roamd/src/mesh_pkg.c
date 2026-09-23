@@ -10,6 +10,12 @@
 #include "roamd.h"
 #include "mesh.h"
 
+const char *const mesh_pkg_names[MESH_PKG_COUNT] = {
+	MESH_PKG_MAIN,
+	MESH_PKG_UI,
+	MESH_PKG_I18N
+};
+
 #define PKG_CERT	"/etc/roamd/pkg.crt"
 #define SYS_CERTS	"/etc/ssl/certs/ca-certificates.crt"
 #define PKG_DIR		"/var/run/roamd/pkg"
@@ -41,9 +47,10 @@ struct pkg_cache {
 	struct mesh_pkg_meta meta;
 	uint64_t taken;
 	bool valid;
+	unsigned int busy;
 };
 
-static struct pkg_cache cache[8];
+static struct pkg_cache cache[16];
 
 static bool pkg_url(char *out, size_t len)
 {
@@ -259,9 +266,8 @@ fail:
 	return false;
 }
 
-static struct pkg_cache *cache_slot(const char *branch, const char *arch, const char *name)
+static struct pkg_cache *cache_find(const char *branch, const char *arch, const char *name)
 {
-	struct pkg_cache *oldest = &cache[0];
 	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(cache); i++) {
@@ -269,17 +275,43 @@ static struct pkg_cache *cache_slot(const char *branch, const char *arch, const 
 
 		if (!strcmp(c->branch, branch) && !strcmp(c->arch, arch) && !strcmp(c->name, name))
 			return c;
-
-		if (c->taken < oldest->taken)
-			oldest = c;
 	}
 
-	memset(oldest, 0, sizeof(*oldest));
-	snprintf(oldest->branch, sizeof(oldest->branch), "%s", branch);
-	snprintf(oldest->arch, sizeof(oldest->arch), "%s", arch);
-	snprintf(oldest->name, sizeof(oldest->name), "%s", name);
+	return NULL;
+}
 
-	return oldest;
+static struct pkg_cache *cache_take(const char *branch, const char *arch, const char *name)
+{
+	struct pkg_cache *c = cache_find(branch, arch, name), *victim = NULL;
+	unsigned int i;
+
+	if (c)
+		return c;
+
+	for (i = 0; i < ARRAY_SIZE(cache); i++) {
+		c = &cache[i];
+
+		if (c->busy)
+			continue;
+
+		if (!c->branch[0]) {
+			victim = c;
+			break;
+		}
+
+		if (!victim || c->taken < victim->taken)
+			victim = c;
+	}
+
+	if (!victim)
+		return NULL;
+
+	memset(victim, 0, sizeof(*victim));
+	snprintf(victim->branch, sizeof(victim->branch), "%s", branch);
+	snprintf(victim->arch, sizeof(victim->arch), "%s", arch);
+	snprintf(victim->name, sizeof(victim->name), "%s", name);
+
+	return victim;
 }
 
 static bool opkg_meta(const char *index, const char *name, struct mesh_pkg_meta *out)
@@ -333,6 +365,7 @@ static void index_done(struct index_job *job, bool ok)
 
 	job->slot->valid = ok;
 	job->slot->taken = roam_now;
+	job->slot->busy--;
 	free(job);
 
 	if (cb)
@@ -393,7 +426,13 @@ bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 	if (!job)
 		return false;
 
-	job->slot = cache_slot(branch, arch, name);
+	job->slot = cache_take(branch, arch, name);
+	if (!job->slot) {
+		free(job);
+
+		return false;
+	}
+
 	job->cb = cb;
 	job->priv = priv;
 	snprintf(job->name, sizeof(job->name), "%s", name);
@@ -405,8 +444,10 @@ bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 	}
 
 	snprintf(url, sizeof(url), "%s/Packages", job->url);
+	job->slot->busy++;
 
 	if (!mesh_pkg_get(url, NULL, packages_ready, job)) {
+		job->slot->busy--;
 		free(job);
 
 		return false;
@@ -418,9 +459,9 @@ bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 bool mesh_pkg_known(const char *branch, const char *arch, const char *name,
 		    struct mesh_pkg_meta *out)
 {
-	struct pkg_cache *c = cache_slot(branch, arch, name);
+	const struct pkg_cache *c = cache_find(branch, arch, name);
 
-	if (!c->valid)
+	if (!c || !c->valid)
 		return false;
 
 	if (out)
@@ -431,9 +472,12 @@ bool mesh_pkg_known(const char *branch, const char *arch, const char *name,
 
 bool mesh_pkg_stale(const char *branch, const char *arch, const char *name)
 {
-	struct pkg_cache *c = cache_slot(branch, arch, name);
+	const struct pkg_cache *c = cache_find(branch, arch, name);
 
-	return !c->taken || roam_now - c->taken > PKG_CACHE_TTL;
+	if (!c)
+		return true;
+
+	return !c->busy && (!c->taken || roam_now - c->taken > PKG_CACHE_TTL);
 }
 
 static bool pkg_digest_ok(const char *path, const struct mesh_pkg_meta *meta)

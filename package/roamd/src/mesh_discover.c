@@ -174,12 +174,6 @@ static bool probe(const char *addr, const char *mac, struct probe_info *info)
 			 (int)sizeof(info->conflict) - 1, buf);
 	}
 
-	if (info->conflict[0]) {
-		info->pkg = "conflict";
-
-		return true;
-	}
-
 	{
 		char branch[MESH_WORD_MAX];
 

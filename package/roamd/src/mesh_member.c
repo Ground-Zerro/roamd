@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
 
@@ -9,11 +10,11 @@
 #include "mesh.h"
 
 #define LEASES		"/tmp/dhcp.leases"
-#define SSH_KEY		"/etc/roamd/id"
 #define SSH_DIR		"/etc/roamd"
 #define LEASE_START	100
 #define LEASE_LIMIT	150
 #define TAKEN_MAX	256
+#define KEYGEN_TIMEOUT	120000
 
 static uint32_t ip_num(const char *addr)
 {
@@ -256,52 +257,75 @@ void mesh_dnsmasq_reload(void)
 	mesh_run(argv, -1, NULL, 0, 20000);
 }
 
+const char *const mesh_key_files[__MESH_KEY_MAX] = {
+	[MESH_KEY_ED25519] = SSH_DIR "/id",
+	[MESH_KEY_RSA] = SSH_DIR "/id_rsa",
+};
+
+const char *const mesh_key_fields[__MESH_KEY_MAX] = {
+	[MESH_KEY_ED25519] = "ssh_pubkey",
+	[MESH_KEY_RSA] = "ssh_pubkey_rsa",
+};
+
+static const char *const key_types[__MESH_KEY_MAX] = {
+	[MESH_KEY_ED25519] = "ed25519",
+	[MESH_KEY_RSA] = "rsa",
+};
+
 bool mesh_ssh_key_ensure(void)
 {
-	char *argv[8];
-	unsigned int n = 0;
-
-	if (!access(SSH_KEY, R_OK))
-		return true;
+	bool ok = true;
+	unsigned int k;
 
 	mkdir(SSH_DIR, 0700);
 
-	argv[n++] = "/usr/bin/dropbearkey";
-	argv[n++] = "-t";
-	argv[n++] = "ed25519";
-	argv[n++] = "-f";
-	argv[n++] = SSH_KEY;
-	argv[n] = NULL;
+	for (k = 0; k < __MESH_KEY_MAX; k++) {
+		char *argv[] = { "/usr/bin/dropbearkey", "-t", (char *)key_types[k],
+				 "-f", (char *)mesh_key_files[k], NULL };
 
-	if (mesh_run(argv, -1, NULL, 0, 30000))
-		return false;
+		if (!access(mesh_key_files[k], R_OK))
+			continue;
 
-	chmod(SSH_KEY, 0600);
+		roam_log(ROAM_L_INFO, "mesh: generating the %s service SSH key", key_types[k]);
 
-	return true;
+		if (mesh_run(argv, -1, NULL, 0, KEYGEN_TIMEOUT)) {
+			ok = false;
+			continue;
+		}
+
+		chmod(mesh_key_files[k], 0600);
+	}
+
+	return ok;
 }
 
-bool mesh_ssh_pubkey(char *out, size_t len)
+bool mesh_ssh_pubkey(enum mesh_key key, char *out, size_t len)
 {
-	char *argv[8];
-	unsigned int n = 0;
+	static struct {
+		char text[MESH_PUBKEY_MAX];
+		time_t mtime;
+	} cache[__MESH_KEY_MAX];
+	char *argv[] = { "/usr/bin/dropbearkey", "-y", "-f", (char *)mesh_key_files[key], NULL };
 	char buf[1024], *start;
+	struct stat st;
 
-	argv[n++] = "/usr/bin/dropbearkey";
-	argv[n++] = "-y";
-	argv[n++] = "-f";
-	argv[n++] = SSH_KEY;
-	argv[n] = NULL;
-
-	if (mesh_run(argv, -1, buf, sizeof(buf), 20000))
+	if (stat(mesh_key_files[key], &st))
 		return false;
 
-	start = strstr(buf, "ssh-");
-	if (!start)
-		return false;
+	if (!cache[key].text[0] || cache[key].mtime != st.st_mtime) {
+		if (mesh_run(argv, -1, buf, sizeof(buf), 20000))
+			return false;
 
-	snprintf(out, len, "%s", start);
-	out[strcspn(out, "\r\n")] = 0;
+		start = strstr(buf, "ssh-");
+		if (!start)
+			return false;
+
+		start[strcspn(start, "\r\n")] = 0;
+		snprintf(cache[key].text, sizeof(cache[key].text), "%s", start);
+		cache[key].mtime = st.st_mtime;
+	}
+
+	snprintf(out, len, "%s", cache[key].text);
 
 	return out[0] != 0;
 }

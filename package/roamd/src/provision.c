@@ -32,17 +32,70 @@ static bool encryption_is_psk(const char *enc)
 	return enc && !strncmp(enc, "psk", 3);
 }
 
-static void option_set_list(struct uci_session *u, struct uci_section *s,
-			    const char *name, const char *value)
+static void option_set_lines(struct uci_session *u, struct uci_section *s,
+			     const char *name, char values[][MESH_FT_KEY_HEX + 40],
+			     unsigned int count)
 {
 	struct uci_option *o = uci_lookup_option(u->ctx, s, name);
+	unsigned int i = 0;
 
-	if (o && o->type == UCI_TYPE_LIST && o->v.list.next == o->v.list.prev &&
-	    !strcmp(list_to_element(o->v.list.next)->name, value))
-		return;
+	if (o && o->type == UCI_TYPE_LIST) {
+		struct uci_element *e;
+
+		uci_foreach_element(&o->v.list, e) {
+			if (i >= count || strcmp(e->name, values[i]))
+				break;
+			i++;
+		}
+
+		if (i == count)
+			return;
+	}
 
 	uci_session_delete(u, s->e.name, name);
-	uci_session_add_list(u, s->e.name, name, value);
+
+	for (i = 0; i < count; i++)
+		uci_session_add_list(u, s->e.name, name, values[i]);
+}
+
+static void holders_set(struct uci_session *u, struct uci_section *s)
+{
+	char r0[MESH_FT_KH_MAX][MESH_FT_KEY_HEX + 40];
+	char r1[MESH_FT_KH_MAX][MESH_FT_KEY_HEX + 40];
+	char list[MESH_FT_KH_LEN];
+	unsigned int count = 0;
+	char *tok, *save = NULL;
+
+	if (!mesh.ft_kh[0]) {
+		snprintf(r0[0], sizeof(r0[0]), "ff:ff:ff:ff:ff:ff,*,%s", mesh.ft_key);
+		snprintf(r1[0], sizeof(r1[0]), "00:00:00:00:00:00,00:00:00:00:00:00,%s",
+			 mesh.ft_key);
+
+		option_set_lines(u, s, "r0kh", r0, 1);
+		option_set_lines(u, s, "r1kh", r1, 1);
+		uci_session_set(u, s->e.name, "pmk_r1_push", "0");
+
+		return;
+	}
+
+	snprintf(list, sizeof(list), "%s", mesh.ft_kh);
+
+	for (tok = strtok_r(list, " ", &save); tok && count < MESH_FT_KH_MAX;
+	     tok = strtok_r(NULL, " ", &save)) {
+		char *nasid = strchr(tok, '|');
+
+		if (!nasid)
+			continue;
+
+		*nasid++ = '\0';
+		snprintf(r0[count], sizeof(r0[0]), "%s,%s,%s", tok, nasid, mesh.ft_key);
+		snprintf(r1[count], sizeof(r1[0]), "%s,%s,%s", tok, tok, mesh.ft_key);
+		count++;
+	}
+
+	option_set_lines(u, s, "r0kh", r0, count);
+	option_set_lines(u, s, "r1kh", r1, count);
+	uci_session_set(u, s->e.name, "pmk_r1_push", "1");
 }
 
 static void mdid_derive(const char *ssid, char *out)
@@ -101,15 +154,13 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 	}
 
 	if (rrb) {
-		char r0kh[MESH_FT_KEY_HEX + 24], r1kh[MESH_FT_KEY_HEX + 40];
+		char nasid[MESH_NASID_MAX];
+		uint8_t band = mesh_radio_band(u->ctx, u->pkg,
+					       uci_lookup_option_string(u->ctx, s, "device"));
 
-		snprintf(r0kh, sizeof(r0kh), "ff:ff:ff:ff:ff:ff,*,%s", mesh.ft_key);
-		snprintf(r1kh, sizeof(r1kh), "00:00:00:00:00:00,00:00:00:00:00:00,%s", mesh.ft_key);
-
-		uci_session_set(u, s->e.name, "nasid", mesh_self_node_id());
-		uci_session_set(u, s->e.name, "pmk_r1_push", "0");
-		option_set_list(u, s, "r0kh", r0kh);
-		option_set_list(u, s, "r1kh", r1kh);
+		mesh_ft_nasid(mesh_self_node_id(), band, nasid, sizeof(nasid));
+		uci_session_set(u, s->e.name, "nasid", nasid);
+		holders_set(u, s);
 	}
 }
 

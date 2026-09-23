@@ -14,7 +14,6 @@
 #include "roamd.h"
 #include "mesh.h"
 
-#define SSH_KEY		"/etc/roamd/id"
 #define SSH_USER	"root"
 #define KNOWN_HOSTS	"/root/.ssh/known_hosts"
 #define RUN_ARGV_MAX	24
@@ -199,6 +198,19 @@ static void argv_push(char **argv, unsigned int *n, char *value)
 		argv[(*n)++] = value;
 }
 
+static void keys_push(char **argv, unsigned int *n)
+{
+	unsigned int k;
+
+	for (k = 0; k < __MESH_KEY_MAX; k++) {
+		if (access(mesh_key_files[k], R_OK))
+			continue;
+
+		argv_push(argv, n, "-i");
+		argv_push(argv, n, (char *)mesh_key_files[k]);
+	}
+}
+
 void mesh_node_forget(const char *addr)
 {
 	char pattern[MESH_ADDR_MAX + 16];
@@ -231,10 +243,7 @@ int mesh_ssh(const char *addr, const char *cmd, char *out, size_t len, int timeo
 	argv_push(argv, &n, "-y");
 	argv_push(argv, &n, "-y");
 
-	if (!access(SSH_KEY, R_OK)) {
-		argv_push(argv, &n, "-i");
-		argv_push(argv, &n, SSH_KEY);
-	}
+	keys_push(argv, &n);
 
 	argv_push(argv, &n, target);
 	argv_push(argv, &n, (char *)cmd);
@@ -279,10 +288,7 @@ bool mesh_scp(const char *src, const char *addr, const char *dst)
 	argv_push(argv, &n, "-y");
 	argv_push(argv, &n, "-y");
 
-	if (!access(SSH_KEY, R_OK)) {
-		argv_push(argv, &n, "-i");
-		argv_push(argv, &n, SSH_KEY);
-	}
+	keys_push(argv, &n);
 
 	argv_push(argv, &n, target);
 	argv_push(argv, &n, cmd);

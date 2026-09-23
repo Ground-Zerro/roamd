@@ -34,6 +34,11 @@ const char *roam_band_name(enum roam_band band)
 	return band == BAND_LOW ? "2.4" : "5";
 }
 
+uint8_t roam_band_bit(enum roam_band band)
+{
+	return band == BAND_LOW ? MESH_BAND_24 : MESH_BAND_5;
+}
+
 static enum roam_band band_from_freq(int freq)
 {
 	return freq < 3000 ? BAND_LOW : BAND_HIGH;
@@ -311,11 +316,78 @@ void roam_neighbors_resync(void)
 
 static void bss_enable_management(struct roam_bss *bss);
 
+static const struct {
+	const char *method;
+	ubus_data_handler_t data_cb;
+} bss_queries[__BSS_QUERY_MAX] = {
+	[BSS_QUERY_STATUS] = { "get_status", status_cb },
+	[BSS_QUERY_CLIENTS] = { "get_clients", clients_cb },
+	[BSS_QUERY_NR] = { "rrm_nr_get_own", nr_own_cb },
+};
+
+static void bss_poll_finish(struct roam_bss *bss)
+{
+	if (roam_bss_matches(bss)) {
+		neighbor_sync(bss);
+		roam_policy_run(bss);
+	}
+
+	roam_sta_expire();
+	uloop_timeout_set(&bss->poll, config.poll_interval);
+}
+
+static void query_complete_cb(struct ubus_request *req, int ret)
+{
+	struct roam_bss *bss = req->priv;
+
+	if (ret)
+		roam_log(ROAM_L_DEBUG, "roamd: %s on %s failed: %s",
+			 bss_queries[req - bss->query].method, bss->ifname, ubus_strerror(ret));
+
+	bss->query_pending &= ~(1u << (req - bss->query));
+
+	if (!bss->query_pending)
+		bss_poll_finish(bss);
+}
+
+static void query_start(struct roam_bss *bss, enum roam_bss_query q)
+{
+	struct ubus_request *req = &bss->query[q];
+
+	if (ubus_invoke_async(ubus_ctx, bss->obj_id, bss_queries[q].method, NULL, req))
+		return;
+
+	req->data_cb = bss_queries[q].data_cb;
+	req->complete_cb = query_complete_cb;
+	req->priv = bss;
+	bss->query_pending |= 1u << q;
+	ubus_complete_request_async(ubus_ctx, req);
+}
+
+static void queries_abort(struct roam_bss *bss)
+{
+	unsigned int q;
+
+	for (q = 0; q < __BSS_QUERY_MAX; q++)
+		if (bss->query_pending & (1u << q))
+			ubus_abort_request(ubus_ctx, &bss->query[q]);
+
+	bss->query_pending = 0;
+}
+
 static void bss_poll(struct uloop_timeout *t)
 {
 	struct roam_bss *bss = container_of(t, struct roam_bss, poll);
 
 	roam_time_update();
+
+	if (bss->query_pending) {
+		roam_log(ROAM_L_ERR, "roamd: hostapd on %s did not answer in %d ms",
+			 bss->ifname, UBUS_TIMEOUT);
+		queries_abort(bss);
+		bss_poll_finish(bss);
+		return;
+	}
 
 	if (bss->mgmt_pending) {
 		bss_enable_management(bss);
@@ -323,20 +395,19 @@ static void bss_poll(struct uloop_timeout *t)
 			roam_log(ROAM_L_INFO, "roamd: management enabled on %s after retry", bss->ifname);
 	}
 
-	ubus_invoke(ubus_ctx, bss->obj_id, "get_status", NULL, status_cb, bss, UBUS_TIMEOUT);
+	query_start(bss, BSS_QUERY_STATUS);
 
 	if (roam_bss_matches(bss)) {
-		ubus_invoke(ubus_ctx, bss->obj_id, "get_clients", NULL, clients_cb, bss, UBUS_TIMEOUT);
+		query_start(bss, BSS_QUERY_CLIENTS);
 
 		if (!bss->nr)
-			ubus_invoke(ubus_ctx, bss->obj_id, "rrm_nr_get_own", NULL, nr_own_cb, bss, UBUS_TIMEOUT);
-
-		neighbor_sync(bss);
-		roam_policy_run(bss);
+			query_start(bss, BSS_QUERY_NR);
 	}
 
-	roam_sta_expire();
-	uloop_timeout_set(t, config.poll_interval);
+	if (bss->query_pending)
+		uloop_timeout_set(&bss->poll, UBUS_TIMEOUT);
+	else
+		bss_poll_finish(bss);
 }
 
 static int handle_sta_event(struct roam_bss *bss, const char *method, struct blob_attr *msg)
@@ -493,6 +564,7 @@ static int bss_notify_cb(struct ubus_context *ctx, struct ubus_object *obj,
 static void bss_free(struct roam_bss *bss)
 {
 	uloop_timeout_cancel(&bss->poll);
+	queries_abort(bss);
 
 	if (bss->subscribed) {
 		bss->subscribed = false;
@@ -620,7 +692,8 @@ void roam_bss_recheck(void)
 
 	list_for_each_entry(bss, &roam_bss_list, list) {
 		bss_enable_management(bss);
-		uloop_timeout_set(&bss->poll, 100);
+		if (!bss->query_pending)
+			uloop_timeout_set(&bss->poll, 100);
 	}
 }
 

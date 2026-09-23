@@ -105,7 +105,6 @@ static int pkg_push(const char *addr, const char *path, bool apk, bool force)
 
 int mesh_node_install(const char *addr, const char *branch, const char *arch, bool force)
 {
-	static const char *const names[] = { MESH_PKG_MAIN, MESH_PKG_UI };
 	char path[256];
 	bool apk = node_apk(addr);
 	bool luci = node_has_luci(addr);
@@ -115,14 +114,14 @@ int mesh_node_install(const char *addr, const char *branch, const char *arch, bo
 
 	mesh_ssh(addr, ": > /tmp/roamd-install.log", NULL, 0, NODE_SSH_SHORT);
 
-	for (i = 0; i < ARRAY_SIZE(names); i++) {
-		bool main_pkg = !strcmp(names[i], MESH_PKG_MAIN);
+	for (i = 0; i < MESH_PKG_COUNT; i++) {
+		bool main_pkg = !strcmp(mesh_pkg_names[i], MESH_PKG_MAIN);
 
 		if (!main_pkg && !luci)
 			continue;
 
-		if (mesh_pkg_sync(branch, arch, names[i]) &&
-		    mesh_pkg_path(branch, arch, names[i], path, sizeof(path))) {
+		if (mesh_pkg_sync(branch, arch, mesh_pkg_names[i]) &&
+		    mesh_pkg_path(branch, arch, mesh_pkg_names[i], path, sizeof(path))) {
 			if (!pkg_push(addr, path, apk, force))
 				continue;
 
@@ -132,7 +131,7 @@ int mesh_node_install(const char *addr, const char *branch, const char *arch, bo
 			continue;
 		}
 
-		if (mesh_pkg_path(branch, arch, names[i], path, sizeof(path))) {
+		if (mesh_pkg_path(branch, arch, mesh_pkg_names[i], path, sizeof(path))) {
 			cached = cached || main_pkg;
 
 			if (!pkg_push(addr, path, apk, force))

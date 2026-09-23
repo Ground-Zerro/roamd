@@ -10,11 +10,13 @@
 #include "roamd.h"
 #include "mesh.h"
 
-#define ACQUIRE_DIR	"/var/run/roamd/acquire"
 #define MEMBERS_DIR	"/etc/roamd/members"
 #define TOKENS_DIR	"/etc/roamd/tokens"
 #define SSH_SHORT	20000
 #define SSH_LONG	300000
+#define RESET_GONE_WAIT		90
+#define RESET_BACK_WAIT		240
+#define RESET_PROBE_TIMEOUT	10000
 #define PAYLOAD_MAX	8192
 
 static const char pkg_lock[] =
@@ -155,7 +157,7 @@ static bool mac_read(struct acquire_ctx *c)
 	snprintf(c->member_id, sizeof(c->member_id), "%c%c%c%c%c%c",
 		 out[9], out[10], out[12], out[13], out[15], out[16]);
 
-	snprintf(path, sizeof(path), ACQUIRE_DIR "/%s.mac", c->task);
+	snprintf(path, sizeof(path), MESH_ACQUIRE_DIR "/%s.mac", c->task);
 	f = fopen(path, "w");
 	if (f) {
 		fprintf(f, "%s\n", c->mac);
@@ -163,6 +165,74 @@ static bool mac_read(struct acquire_ctx *c)
 	}
 
 	return true;
+}
+
+static void linklocal_from_mac(const char *mac, const char *ifname, char *out, size_t len)
+{
+	unsigned int b[6];
+
+	out[0] = '\0';
+
+	if (sscanf(mac, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6)
+		return;
+
+	snprintf(out, len, "fe80::%02x%02x:%02xff:fe%02x:%02x%02x%%%s",
+		 b[0] ^ 0x02, b[1], b[2], b[3], b[4], b[5], ifname);
+}
+
+static bool factory_reset(struct acquire_ctx *c)
+{
+	char out[128], back[MESH_ADDR_MAX], lan[IFNAMSIZ];
+	int waited;
+
+	mesh_task_report(c->task, "reset", "progress",
+			 "resetting the device to factory settings");
+
+	if (mesh_ssh(c->addr,
+		     "cat > /tmp/roamd-reset.sh <<'EOS'\n"
+		     "#!/bin/sh\n"
+		     "sleep 2\n"
+		     "firstboot -y >/dev/null 2>&1\n"
+		     "sync\n"
+		     "reboot\n"
+		     "EOS\n"
+		     "ubus call service add '{\"name\":\"roamd-reset\",\"instances\":"
+		     "{\"main\":{\"command\":[\"/bin/sh\",\"/tmp/roamd-reset.sh\"]}}}' "
+		     ">/dev/null 2>&1\n"
+		     "echo accepted\n", out, sizeof(out), SSH_SHORT) || !strstr(out, "accepted"))
+		return false;
+
+	for (waited = 0; waited < RESET_GONE_WAIT; waited += 5) {
+		sleep(5);
+
+		if (mesh_ssh(c->addr, "exit 0", NULL, 0, RESET_PROBE_TIMEOUT))
+			break;
+	}
+
+	if (!mesh_bridge_lan(lan, sizeof(lan)))
+		return false;
+
+	linklocal_from_mac(c->mac, lan, back, sizeof(back));
+	if (!back[0])
+		return false;
+
+	mesh_task_report(c->task, "reset", "progress",
+			 "waiting for the device to come back after the reset");
+
+	for (waited = 0; waited < RESET_BACK_WAIT; waited += 10) {
+		sleep(10);
+
+		if (mesh_ssh(back, "exit 0", NULL, 0, RESET_PROBE_TIMEOUT))
+			continue;
+
+		snprintf(c->addr, sizeof(c->addr), "%s", back);
+		mesh_task_report(c->task, "reset", "ok",
+				 "the device is reset to factory settings and back online");
+
+		return true;
+	}
+
+	return false;
 }
 
 static bool deps_need(struct acquire_ctx *c)
@@ -380,21 +450,25 @@ static int enroll_channel(struct acquire_ctx *c, const char *token)
 
 static void enroll_key(struct acquire_ctx *c)
 {
-	char pubkey[512], payload[PAYLOAD_MAX], cmd[1024];
+	char pubkey[MESH_PUBKEY_MAX], payload[PAYLOAD_MAX], cmd[MESH_PUBKEY_MAX * 3 + 256];
+	bool installed = false;
+	unsigned int k;
 
-	if (!mesh_ssh_pubkey(pubkey, sizeof(pubkey)))
-		return;
+	for (k = 0; k < __MESH_KEY_MAX; k++) {
+		if (!mesh_ssh_pubkey(k, pubkey, sizeof(pubkey)))
+			continue;
 
-	snprintf(cmd, sizeof(cmd),
-		 "mkdir -p /etc/dropbear; grep -qF '%.400s' /etc/dropbear/authorized_keys 2>/dev/null || "
-		 "printf '%%s\\n' '%.400s' >> /etc/dropbear/authorized_keys; "
-		 "chmod 600 /etc/dropbear/authorized_keys", pubkey, pubkey);
+		snprintf(cmd, sizeof(cmd),
+			 "mkdir -p /etc/dropbear; grep -qxF '%s' /etc/dropbear/authorized_keys 2>/dev/null || "
+			 "printf '%%s\\n' '%s' >> /etc/dropbear/authorized_keys; "
+			 "chmod 600 /etc/dropbear/authorized_keys; "
+			 "grep -qxF '%s' /etc/dropbear/authorized_keys", pubkey, pubkey, pubkey);
 
-	mesh_ssh(c->addr, cmd, NULL, 0, SSH_SHORT);
+		if (!mesh_ssh(c->addr, cmd, NULL, 0, SSH_SHORT))
+			installed = true;
+	}
 
-	snprintf(cmd, sizeof(cmd), "grep -qF '%.400s' /etc/dropbear/authorized_keys", pubkey);
-
-	if (mesh_ssh(c->addr, cmd, NULL, 0, SSH_SHORT)) {
+	if (!installed) {
 		mesh_task_report(c->task, "enroll", "progress",
 				 "service key was not installed, password login left enabled on the node");
 
@@ -425,7 +499,7 @@ static void enroll_key(struct acquire_ctx *c)
 				 "key login does not work, the node restores password login by itself in 90s");
 }
 
-int mesh_acquire_run(const char *addr, const char *task)
+int mesh_acquire_run(const char *addr, const char *task, bool reset)
 {
 	struct acquire_ctx c = { .task = task };
 	char text[320], token[32], conflict[MESH_WORD_MAX];
@@ -441,10 +515,24 @@ int mesh_acquire_run(const char *addr, const char *task)
 	if (!board_read(&c))
 		return fail(&c, "probe", "SSH root without a password is not available");
 
+	if (!mac_read(&c))
+		return fail(&c, "probe", "cannot read the node MAC address");
+
+	if (reset) {
+		if (!factory_reset(&c))
+			return fail(&c, "reset",
+				    "the device did not come back after the factory reset");
+
+		if (!board_read(&c))
+			return fail(&c, "probe", "the device is not reachable after the reset");
+	} else {
+		mesh_task_report(task, "reset", "ok", "the reset is skipped by the user");
+	}
+
 	if (conflict_check(&c, conflict, sizeof(conflict))) {
 		snprintf(text, sizeof(text),
-			 "%.16s is installed on the device and conflicts with roamd — remove it "
-			 "or reset the device to factory settings", conflict);
+			 "%.16s is part of the device firmware and conflicts with roamd — "
+			 "it cannot be captured", conflict);
 
 		return fail(&c, "probe", text);
 	}
@@ -452,9 +540,6 @@ int mesh_acquire_run(const char *addr, const char *task)
 	snprintf(text, sizeof(text), "%.63s %.36s", c.hostname[0] ? c.hostname : "OpenWrt",
 		 c.version);
 	mesh_task_report(task, "probe", "ok", text);
-
-	if (!mac_read(&c))
-		return fail(&c, "probe", "cannot read the node MAC address");
 
 	if (!mesh_node_release(c.addr, false, c.branch, sizeof(c.branch), c.arch,
 			       sizeof(c.arch)))
