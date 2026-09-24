@@ -15,6 +15,7 @@
 #define MESH_NAME_MAX		64
 #define MESH_ADDR_MAX		64
 #define MESH_MAC_MAX		18
+#define MESH_PROBE_ID		0x524d
 #define MESH_URL_MAX		192
 #define MESH_WORD_MAX		12
 #define MESH_ARCH_MAX		24
@@ -257,11 +258,13 @@ struct mesh_neigh {
 	char addr[MESH_ADDR_MAX];
 	char mac[MESH_MAC_MAX];
 	bool v6;
-	bool ll;
 };
 
 unsigned int mesh_neigh_dump(const char *ifname, struct mesh_neigh *out, unsigned int max);
-void mesh_neigh_warm(const char *ifname, const char *base);
+void mesh_neigh_warm4(const char *ifname, const char *base);
+void mesh_neigh_warm6(const char *ifname);
+int mesh_icmp_socket(int family);
+uint16_t mesh_icmp_sum(const void *data, size_t len);
 int mesh_discover_run(void);
 
 bool mesh_lan_cidr(char *out, size_t len);

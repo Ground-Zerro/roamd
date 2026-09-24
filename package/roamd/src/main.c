@@ -72,6 +72,7 @@ static void ubus_connect_handler(struct ubus_context *ctx)
 
 int main(int argc, char **argv)
 {
+	openlog("roamd", LOG_PID, LOG_DAEMON);
 	roam_time_update();
 	roam_bss_setup();
 	roam_sta_setup();
@@ -143,8 +144,6 @@ int main(int argc, char **argv)
 
 		return rc;
 	}
-
-	openlog("roamd", LOG_PID, LOG_DAEMON);
 
 	roam_config_load();
 

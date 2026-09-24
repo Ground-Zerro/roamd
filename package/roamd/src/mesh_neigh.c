@@ -9,11 +9,17 @@
 #include <linux/rtnetlink.h>
 #include <linux/neighbour.h>
 #include <net/if.h>
+#include <netinet/icmp6.h>
+#include <netinet/ip_icmp.h>
+#include <poll.h>
 
 #include "roamd.h"
 #include "mesh.h"
 
 #define NEIGH_BUF	16384
+#define WARM6_ROUNDS	2
+#define WARM6_LISTEN	500
+#define WARM6_PEERS	64
 
 struct neigh_req {
 	struct nlmsghdr n;
@@ -106,11 +112,13 @@ unsigned int mesh_neigh_dump(const char *ifname, struct mesh_neigh *out, unsigne
 			if (!addr[0] || !mac[0])
 				continue;
 
+			if (nd->ndm_family == AF_INET6 && strncasecmp(addr, "fe80:", 5))
+				continue;
+
 			memset(&out[n], 0, sizeof(out[n]));
 			snprintf(out[n].addr, sizeof(out[n].addr), "%s", addr);
 			snprintf(out[n].mac, sizeof(out[n].mac), "%s", mac);
 			out[n].v6 = nd->ndm_family == AF_INET6;
-			out[n].ll = out[n].v6 && !strncasecmp(addr, "fe80:", 5);
 			n++;
 		}
 
@@ -124,87 +132,132 @@ unsigned int mesh_neigh_dump(const char *ifname, struct mesh_neigh *out, unsigne
 	return n;
 }
 
-static void neigh_warm6(const char *ifname)
+int mesh_icmp_socket(int family)
 {
-	struct sockaddr_in6 to = { .sin6_family = AF_INET6 };
-	struct icmp6_probe {
-		uint8_t type;
-		uint8_t code;
-		uint16_t checksum;
-		uint16_t id;
-		uint16_t seq;
-	} probe = { .type = 128, .id = htons(0x524d) };
-	unsigned int idx = ifname ? if_nametoindex(ifname) : 0;
-	int fd;
+	int proto = family == AF_INET6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP;
+	int fd = socket(family, SOCK_DGRAM | SOCK_CLOEXEC, proto);
 
-	if (!idx)
-		return;
+	return fd < 0 ? socket(family, SOCK_RAW | SOCK_CLOEXEC, proto) : fd;
+}
 
-	fd = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_ICMPV6);
+uint16_t mesh_icmp_sum(const void *data, size_t len)
+{
+	const uint8_t *p = data;
+	uint32_t sum = 0;
+
+	for (; len > 1; p += 2, len -= 2)
+		sum += (uint32_t)p[0] << 8 | p[1];
+
+	if (len)
+		sum += (uint32_t)p[0] << 8;
+
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+
+	return htons((uint16_t)~sum);
+}
+
+void mesh_neigh_warm4(const char *ifname, const char *base)
+{
+	struct sockaddr_in to = { .sin_family = AF_INET };
+	struct icmphdr probe = { .type = ICMP_ECHO, .un.echo.id = htons(MESH_PROBE_ID) };
+	unsigned int host;
+	int fd = mesh_icmp_socket(AF_INET);
+
 	if (fd < 0)
 		return;
 
 	setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname));
 
-	if (inet_pton(AF_INET6, "ff02::1", &to.sin6_addr) == 1) {
-		to.sin6_scope_id = idx;
-		sendto(fd, &probe, sizeof(probe), MSG_DONTWAIT,
-		       (struct sockaddr *)&to, sizeof(to));
+	for (host = 1; host < 255; host++) {
+		char addr[INET_ADDRSTRLEN];
+
+		snprintf(addr, sizeof(addr), "%s.%u", base, host);
+
+		if (inet_pton(AF_INET, addr, &to.sin_addr) != 1)
+			continue;
+
+		probe.un.echo.sequence = htons(host);
+		probe.checksum = 0;
+		probe.checksum = mesh_icmp_sum(&probe, sizeof(probe));
+
+		sendto(fd, &probe, sizeof(probe), MSG_DONTWAIT, (struct sockaddr *)&to, sizeof(to));
 	}
 
 	close(fd);
 }
 
-void mesh_neigh_warm(const char *ifname, const char *base)
+static void echo6_send(int fd, const struct sockaddr_in6 *to, uint16_t seq)
 {
-	struct sockaddr_in to = { .sin_family = AF_INET };
-	struct icmp_probe {
+	struct icmp6_hdr probe = { .icmp6_type = ICMP6_ECHO_REQUEST };
+
+	probe.icmp6_id = htons(MESH_PROBE_ID);
+	probe.icmp6_seq = htons(seq);
+
+	sendto(fd, &probe, sizeof(probe), MSG_DONTWAIT, (const struct sockaddr *)to, sizeof(*to));
+}
+
+static unsigned int echo6_collect(int fd, struct in6_addr *peer, unsigned int n, unsigned int max)
+{
+	struct pollfd pfd = { .fd = fd, .events = POLLIN };
+	unsigned int left = WARM6_PEERS * WARM6_ROUNDS * 2;
+
+	while (left-- && poll(&pfd, 1, WARM6_LISTEN) > 0) {
+		struct sockaddr_in6 from;
+		socklen_t len = sizeof(from);
 		uint8_t type;
-		uint8_t code;
-		uint16_t checksum;
-		uint16_t id;
-		uint16_t seq;
-	} probe = { .type = 8, .id = htons(0x524d) };
-	unsigned int host;
+		unsigned int i;
+
+		if (recvfrom(fd, &type, sizeof(type), MSG_DONTWAIT | MSG_TRUNC,
+			     (struct sockaddr *)&from, &len) <= 0)
+			continue;
+
+		if (type != ICMP6_ECHO_REPLY || !IN6_IS_ADDR_LINKLOCAL(&from.sin6_addr))
+			continue;
+
+		for (i = 0; i < n && memcmp(&peer[i], &from.sin6_addr, sizeof(peer[i])); i++)
+			;
+
+		if (i == n && n < max)
+			peer[n++] = from.sin6_addr;
+	}
+
+	return n;
+}
+
+void mesh_neigh_warm6(const char *ifname)
+{
+	struct sockaddr_in6 to = { .sin6_family = AF_INET6 };
+	struct in6_addr peer[WARM6_PEERS];
+	struct icmp6_filter filter;
+	unsigned int idx = if_nametoindex(ifname), n = 0, i;
+	uint16_t seq;
 	int fd;
 
-	fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_ICMP);
-	if (fd < 0)
-		fd = socket(AF_INET, SOCK_RAW | SOCK_CLOEXEC, IPPROTO_ICMP);
+	if (!idx)
+		return;
 
+	fd = mesh_icmp_socket(AF_INET6);
 	if (fd < 0)
 		return;
 
-	if (ifname)
-		setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname));
+	ICMP6_FILTER_SETBLOCKALL(&filter);
+	ICMP6_FILTER_SETPASS(ICMP6_ECHO_REPLY, &filter);
+	setsockopt(fd, IPPROTO_ICMPV6, ICMP6_FILTER, &filter, sizeof(filter));
+	setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, ifname, strlen(ifname));
 
-	for (host = 1; host < 255; host++) {
-		char addr[INET_ADDRSTRLEN];
-		uint32_t sum = 0;
-		const uint8_t *p = (const uint8_t *)&probe;
-		size_t i;
+	inet_pton(AF_INET6, "ff02::1", &to.sin6_addr);
+	to.sin6_scope_id = idx;
 
-		snprintf(addr, sizeof(addr), "%s.%u", base, host);
+	for (seq = 0; seq < WARM6_ROUNDS; seq++) {
+		echo6_send(fd, &to, seq);
+		n = echo6_collect(fd, peer, n, WARM6_PEERS);
+	}
 
-		if (!inet_pton(AF_INET, addr, &to.sin_addr))
-			continue;
-
-		probe.seq = htons(host);
-		probe.checksum = 0;
-
-		for (i = 0; i < sizeof(probe); i += 2)
-			sum += (uint32_t)p[i] << 8 | p[i + 1];
-
-		while (sum >> 16)
-			sum = (sum & 0xffff) + (sum >> 16);
-
-		probe.checksum = htons((uint16_t)~sum);
-
-		if (sendto(fd, &probe, sizeof(probe), MSG_DONTWAIT,
-			   (struct sockaddr *)&to, sizeof(to)) < 0)
-			continue;
+	for (i = 0; i < n; i++) {
+		to.sin6_addr = peer[i];
+		echo6_send(fd, &to, seq + i);
 	}
 
 	close(fd);
-	neigh_warm6(ifname);
 }

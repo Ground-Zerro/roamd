@@ -10,11 +10,13 @@
 #include "mesh.h"
 
 #define CANDIDATES	"/var/run/roamd/candidates.json"
-#define NEIGH_MAX	128
+#define NEIGH_MAX	256
 #define PROBE_TIMEOUT	15000
 #define PROBE_TRIES	3
 #define SSH_PORT	22
 #define PORT_TIMEOUT	1500
+
+static const char port_closed[] = "SSH port is closed";
 
 struct probe_info {
 	char addr[MESH_ADDR_MAX];
@@ -125,7 +127,7 @@ static const char *pkg_state(const char *os, const char *arch)
 	       "ready" : "unreachable";
 }
 
-static bool probe(const char *addr, const char *mac, struct probe_info *info)
+static const char *probe(const char *addr, const char *mac, struct probe_info *info)
 {
 	char buf[2048];
 	unsigned int try;
@@ -135,15 +137,15 @@ static bool probe(const char *addr, const char *mac, struct probe_info *info)
 	snprintf(info->mac, sizeof(info->mac), "%s", mac);
 
 	if (!mesh_port_open(addr, SSH_PORT, PORT_TIMEOUT))
-		return false;
+		return port_closed;
 
 	for (try = 0; mesh_ssh_pass(addr, "ubus call system board", buf, sizeof(buf),
 				    PROBE_TIMEOUT); try++)
 		if (try + 1 >= PROBE_TRIES)
-			return false;
+			return "SSH root without a password is not available";
 
 	if (!board_parse(buf, info))
-		return false;
+		return "not an OpenWrt device";
 
 	if (!mesh_ssh_pass(addr, "uci -q get roamd.mesh.role", buf, sizeof(buf), PROBE_TIMEOUT)) {
 		buf[strcspn(buf, "\r\n")] = 0;
@@ -156,10 +158,10 @@ static bool probe(const char *addr, const char *mac, struct probe_info *info)
 				ctrl[strcspn(ctrl, "\r\n")] = 0;
 
 				if (ctrl[0] && strcmp(ctrl, mesh.controller_id))
-					return false;
+					return "node of another controller";
 
 				if (ctrl[0] && member_mac(mac))
-					return false;
+					return "already a member";
 			}
 		}
 	}
@@ -184,15 +186,28 @@ static bool probe(const char *addr, const char *mac, struct probe_info *info)
 
 	info->pkg = pkg_state(info->os, info->arch);
 
-	return true;
+	return NULL;
+}
+
+static bool mac_seen(const struct mesh_neigh *neigh, const bool *seen, unsigned int n,
+		     const char *mac)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		if (seen[i] && !strcasecmp(neigh[i].mac, mac))
+			return true;
+
+	return false;
 }
 
 int mesh_discover_run(void)
 {
 	struct mesh_neigh neigh[NEIGH_MAX], own[8];
+	bool seen[NEIGH_MAX] = { false };
 	struct blob_buf b = { 0 };
 	char lan[IFNAMSIZ], base[INET_ADDRSTRLEN] = "";
-	unsigned int n, n_own = 0, i;
+	unsigned int n, n_own = 0, i, hits = 0;
 	char path[160], *json;
 	void *arr;
 	FILE *f;
@@ -231,10 +246,12 @@ int mesh_discover_run(void)
 	}
 
 	if (base[0])
-		mesh_neigh_warm(lan, base);
+		mesh_neigh_warm4(lan, base);
 
+	mesh_neigh_warm6(lan);
 	sleep(2);
 	n = mesh_neigh_dump(lan, neigh, ARRAY_SIZE(neigh));
+	roam_log(ROAM_L_DEBUG, "mesh: discover: %u neighbors on %s", n, lan);
 
 	blob_buf_init(&b, 0);
 	arr = blobmsg_open_array(&b, "candidates");
@@ -242,21 +259,28 @@ int mesh_discover_run(void)
 	for (i = 0; i < n; i++) {
 		struct probe_info info;
 		char addr[MESH_ADDR_MAX];
+		const char *skip;
 		void *t;
 
-		if (neigh[i].v6 && !neigh[i].ll)
+		if (own_address(neigh[i].addr, own, n_own) ||
+		    mac_seen(neigh, seen, i, neigh[i].mac))
 			continue;
 
-		if (own_address(neigh[i].addr, own, n_own))
-			continue;
-
-		if (neigh[i].ll)
+		if (neigh[i].v6)
 			snprintf(addr, sizeof(addr), "%.45s%%%.15s", neigh[i].addr, lan);
 		else
 			snprintf(addr, sizeof(addr), "%.45s", neigh[i].addr);
 
-		if (!probe(addr, neigh[i].mac, &info))
+		skip = probe(addr, neigh[i].mac, &info);
+		seen[i] = skip != port_closed;
+
+		if (skip) {
+			roam_log(ROAM_L_DEBUG, "mesh: discover: %s (%s) skipped: %s",
+				 addr, neigh[i].mac, skip);
 			continue;
+		}
+
+		hits++;
 
 		t = blobmsg_open_table(&b, NULL);
 		blobmsg_add_string(&b, "addr", info.addr);
@@ -275,6 +299,8 @@ int mesh_discover_run(void)
 	}
 
 	blobmsg_close_array(&b, arr);
+	roam_log(ROAM_L_INFO, "mesh: discover: %u candidates among %u neighbors on %s",
+		 hits, n, lan);
 
 	json = blobmsg_format_json(b.head, true);
 	blob_buf_free(&b);

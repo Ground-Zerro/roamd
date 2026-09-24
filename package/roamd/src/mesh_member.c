@@ -198,7 +198,7 @@ bool mesh_lease_reserve(const char *cidr, const char *mac, const char *id,
 			dot = strrchr(prefix, '.');
 			if (dot) {
 				*dot = 0;
-				mesh_neigh_warm(lan, prefix);
+				mesh_neigh_warm4(lan, prefix);
 			}
 
 			taken_collect(&taken, lan);

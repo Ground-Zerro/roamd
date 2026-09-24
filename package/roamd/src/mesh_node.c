@@ -38,7 +38,6 @@
 #define MESH_BH_SCAN_RETRY	30000
 #define MESH_SEG_TICK		30000
 #define MESH_SIGNAL_STRONG	-65
-#define MESH_PROBE_ID		0x524d
 #define MESH_BRIDGE		"br-lan"
 #define MESH_BH_STA		"mesh_bh_sta"
 #define MESH_LINK_SAMPLE_GAP	3000
@@ -977,22 +976,6 @@ static struct uloop_fd probe = { .fd = -1 };
 static struct in_addr probe_addr;
 static uint16_t probe_seq;
 
-static uint16_t icmp_sum(const uint8_t *p, size_t len)
-{
-	uint32_t sum = 0;
-
-	for (; len > 1; p += 2, len -= 2)
-		sum += (uint32_t)p[0] << 8 | p[1];
-
-	if (len)
-		sum += (uint32_t)p[0] << 8;
-
-	while (sum >> 16)
-		sum = (sum & 0xffff) + (sum >> 16);
-
-	return htons((uint16_t)~sum);
-}
-
 bool mesh_icmp_ping(const char *addr, int timeout_ms)
 {
 	struct sockaddr_in to = { .sin_family = AF_INET };
@@ -1005,15 +988,12 @@ bool mesh_icmp_ping(const char *addr, int timeout_ms)
 	if (!inet_pton(AF_INET, addr, &to.sin_addr))
 		return false;
 
-	fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_ICMP);
-	if (fd < 0)
-		fd = socket(AF_INET, SOCK_RAW | SOCK_CLOEXEC, IPPROTO_ICMP);
-
+	fd = mesh_icmp_socket(AF_INET);
 	if (fd < 0)
 		return false;
 
 	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-	ic.checksum = icmp_sum((const uint8_t *)&ic, sizeof(ic));
+	ic.checksum = mesh_icmp_sum(&ic, sizeof(ic));
 
 	if (sendto(fd, &ic, sizeof(ic), 0, (struct sockaddr *)&to, sizeof(to)) == sizeof(ic))
 		ok = recv(fd, buf, sizeof(buf), 0) > 0;
@@ -1067,7 +1047,7 @@ static void probe_send(void)
 	probe_addr = sa.sin_addr;
 	ic.un.echo.id = htons(MESH_PROBE_ID);
 	ic.un.echo.sequence = htons(++probe_seq);
-	ic.checksum = icmp_sum((const uint8_t *)&ic, sizeof(ic));
+	ic.checksum = mesh_icmp_sum(&ic, sizeof(ic));
 	sendto(probe.fd, &ic, sizeof(ic), 0, (struct sockaddr *)&sa, sizeof(sa));
 }
 
