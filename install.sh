@@ -154,15 +154,14 @@ pkg_version() {
 }
 
 pkg_apply() {
+	if [ "$PKG_IS_APK" -eq 1 ]; then
+		apk add "$@" && apk upgrade "$@"
+		return
+	fi
+
 	for p in "$@"; do
 		if pkg_installed "$p"; then
-			if [ "$PKG_IS_APK" -eq 1 ]; then
-				apk upgrade "$p" || return 1
-			else
-				opkg upgrade "$p" || return 1
-			fi
-		elif [ "$PKG_IS_APK" -eq 1 ]; then
-			apk add "$p" || return 1
+			opkg upgrade "$p" || return 1
 		else
 			opkg install "$p" || return 1
 		fi

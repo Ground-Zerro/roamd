@@ -51,8 +51,11 @@ roamd (`/etc/opkg/customfeeds.conf`, на 25.12 — `/etc/apk/repositories.d/roa
 
 ```sh
 opkg update && opkg upgrade roamd luci-app-roamd
-apk update && apk upgrade roamd luci-app-roamd
+apk update && apk add roamd luci-app-roamd && apk upgrade roamd luci-app-roamd
 ```
+
+На 25.12 `apk add` перед `apk upgrade` обязателен, если пакеты ставились из файла или контроллер
+обновлялся из интерфейса: такие пакеты `apk` закрепляет за файлом, и `apk upgrade` их не трогает.
 
 Ставится только одно устройство — будущий контроллер. На узлы Mesh Wi-Fi-системы пакеты ставит
 сам контроллер.
