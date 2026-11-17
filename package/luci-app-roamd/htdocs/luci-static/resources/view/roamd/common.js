@@ -15,7 +15,77 @@ var callHostHints = rpc.declare({
 	expect: { }
 });
 
+var callRrdns = rpc.declare({
+	object: 'network.rrdns',
+	method: 'lookup',
+	params: [ 'addrs', 'timeout', 'limit' ],
+	expect: { '': {} }
+});
+
+var callClientHost = rpc.declare({
+	object: 'roamd',
+	method: 'mesh_client_host',
+	params: [ 'mac', 'name' ]
+});
+
 var localDomain = 'lan';
+
+var RDNS_RETRY = 300000;
+var rdns = {};
+var rdnsBusy = false;
+
+function rdnsName(ip, fqdn) {
+	var label = String(fqdn || '').split('.')[0];
+
+	if (!label || label.replace(/-/g, '.') === ip)
+		return '';
+
+	return label;
+}
+
+function resolveHints(hints) {
+	var now = Date.now(), want = [];
+
+	for (var mac in hints) {
+		var h = hints[mac], ip = h.ipaddrs && h.ipaddrs[0];
+		var known = ip && rdns[ip];
+
+		if (h.name || !ip)
+			continue;
+
+		if (known && known.name)
+			h.name = known.name;
+		else if (!known || now - known.at > RDNS_RETRY)
+			want.push(ip);
+	}
+
+	if (!want.length || rdnsBusy)
+		return Promise.resolve(hints);
+
+	rdnsBusy = true;
+
+	return L.resolveDefault(callRrdns(want, 1000, 1000), {}).then(function(names) {
+		rdnsBusy = false;
+
+		want.forEach(function(ip) {
+			rdns[ip] = { name: rdnsName(ip, (names || {})[ip]), at: now };
+		});
+
+		for (var mac in hints) {
+			var h = hints[mac], ip = h.ipaddrs && h.ipaddrs[0];
+
+			if (h.name || !ip || !rdns[ip] || !rdns[ip].name)
+				continue;
+
+			h.name = rdns[ip].name;
+
+			if (want.indexOf(ip) >= 0)
+				callClientHost(mac.toLowerCase(), h.name).catch(function() {});
+		}
+
+		return hints;
+	});
+}
 
 function stripDomain(name) {
 	var tail = '.' + localDomain;
@@ -66,7 +136,7 @@ return baseclass.extend({
 			if (domain)
 				localDomain = domain;
 
-			return res[0] || {};
+			return resolveHints(res[0] || {});
 		});
 	},
 

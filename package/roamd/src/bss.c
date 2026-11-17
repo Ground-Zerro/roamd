@@ -181,7 +181,8 @@ static bool client_rrm_beacon(struct blob_attr *client)
 	return !!(blobmsg_get_u32(blobmsg_data(list)) & 0x70);
 }
 
-static void client_update(struct roam_bss *bss, struct blob_attr *client, const char *mac)
+static void client_update(struct roam_bss *bss, struct blob_attr *client, const char *mac,
+			  uint32_t round)
 {
 	enum {
 		CL_ASSOC,
@@ -214,6 +215,7 @@ static void client_update(struct roam_bss *bss, struct blob_attr *client, const 
 	if (tb[CL_SIGNAL])
 		signal = (int32_t)blobmsg_get_u32(tb[CL_SIGNAL]);
 
+	sta->polled = round;
 	sta->btm = client_ext_capa_btm(client);
 	sta->rrm = client_rrm_beacon(client);
 	sta->band[bss->band].ht = tb[CL_HT] && blobmsg_get_u8(tb[CL_HT]);
@@ -224,16 +226,24 @@ static void client_update(struct roam_bss *bss, struct blob_attr *client, const 
 static void clients_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 {
 	static const struct blobmsg_policy policy = { "clients", BLOBMSG_TYPE_TABLE };
+	static uint32_t round;
 	struct roam_bss *bss = req->priv;
 	struct blob_attr *list = NULL, *cur;
+	struct roam_sta *sta;
 	int rem;
 
 	blobmsg_parse(&policy, 1, &list, blob_data(msg), blob_len(msg));
 	if (!list)
 		return;
 
+	round++;
 	blobmsg_for_each_attr(cur, list, rem)
-		client_update(bss, cur, blobmsg_name(cur));
+		client_update(bss, cur, blobmsg_name(cur), round);
+
+	avl_for_each_element(&roam_sta_tree, sta, avl) {
+		if (sta->bss == bss && sta->polled != round)
+			roam_sta_disconnected(sta);
+	}
 }
 
 static void nr_own_cb(struct ubus_request *req, int type, struct blob_attr *msg)
@@ -293,7 +303,7 @@ static void neighbor_sync(struct roam_bss *bss)
 
 	blobmsg_close_array(&b, list);
 
-	if (!count)
+	if (!count && !bss->nr_sent)
 		return;
 
 	fp = blob_fingerprint(b.head);
@@ -498,19 +508,27 @@ static int handle_beacon_report(struct blob_attr *msg)
 		return 0;
 
 	target = roam_bss_by_bssid((uint8_t *)bssid->ether_addr_octet);
-	if (!target)
+	if (!target && !mesh_neighbor_known((uint8_t *)bssid->ether_addr_octet))
 		return 0;
 
 	rcpi = (uint8_t)blobmsg_get_u16(tb[BR_RCPI]);
 	if (rcpi >= ROAMD_RCPI_IMPLAUSIBLE) {
-		roam_log(ROAM_L_DEBUG, "roamd: beacon report %s on %s GHz dropped, rcpi %u",
-			 sta->mac, roam_band_name(target->band), rcpi);
+		roam_log(ROAM_L_DEBUG, "roamd: beacon report %s for %s dropped, rcpi %u",
+			 sta->mac, blobmsg_get_string(tb[BR_BSSID]), rcpi);
 		return 0;
 	}
 
 	signal = ((int)rcpi / 2) - 110;
 
 	sta->beacon_req_silent = 0;
+	roam_sta_measured(sta, (uint8_t *)bssid->ether_addr_octet, signal);
+
+	if (!target || (sta->bss && target->band == sta->bss->band)) {
+		roam_log(ROAM_L_DEBUG, "roamd: beacon report %s for %s signal %d (rcpi %u)",
+			 sta->mac, blobmsg_get_string(tb[BR_BSSID]), signal, rcpi);
+		return 0;
+	}
+
 	sta->band[target->band].signal = signal;
 	sta->band[target->band].seen = roam_now;
 	sta->band[target->band].present = true;
@@ -521,7 +539,7 @@ static int handle_beacon_report(struct blob_attr *msg)
 	return 0;
 }
 
-static int handle_disassoc(struct blob_attr *msg)
+static int handle_disassoc(struct roam_bss *bss, struct blob_attr *msg)
 {
 	static const struct blobmsg_policy policy = { "address", BLOBMSG_TYPE_STRING };
 	struct blob_attr *tb = NULL;
@@ -537,7 +555,7 @@ static int handle_disassoc(struct blob_attr *msg)
 		return 0;
 
 	sta = roam_sta_get((uint8_t *)ea->ether_addr_octet, false);
-	if (sta)
+	if (sta && sta->bss == bss)
 		roam_sta_disconnected(sta);
 
 	return 0;
@@ -556,7 +574,7 @@ static int bss_notify_cb(struct ubus_context *ctx, struct ubus_object *obj,
 		return handle_beacon_report(msg);
 
 	if (!strcmp(method, "disassoc") || !strcmp(method, "deauth"))
-		return handle_disassoc(msg);
+		return handle_disassoc(bss, msg);
 
 	return handle_sta_event(bss, method, msg);
 }

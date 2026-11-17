@@ -11,6 +11,10 @@
 #define KICK_REASON		5
 #define STEER_RETRY_INTERVAL	5000
 #define BEACON_REQ_PER_POLL	4
+#define RETRY_RESET_TIME	600000
+#define MESH_MEASURE_INTERVAL	5000
+#define BEACON_REQ_GAP		2000
+#define MESH_MEASURE_CHANNELS	8
 
 static struct blob_buf b;
 
@@ -104,16 +108,48 @@ allow:
 	return true;
 }
 
+static bool beacon_req_silenced(struct roam_sta *sta)
+{
+	uint64_t last = sta->last_beacon_req > sta->last_mesh_req ?
+			sta->last_beacon_req : sta->last_mesh_req;
+
+	if (sta->beacon_req_silent < config.steer_retries)
+		return false;
+
+	if (roam_now - last < RETRY_RESET_TIME)
+		return true;
+
+	sta->beacon_req_silent = 0;
+
+	return false;
+}
+
+static void beacon_req_send(struct roam_sta *sta, struct roam_bss *from, const char *ssid,
+			    int op_class, int channel)
+{
+	sta->beacon_req_silent++;
+
+	blob_buf_init(&b, 0);
+	blobmsg_add_string(&b, "addr", sta->mac);
+	blobmsg_add_string(&b, "ssid", ssid);
+	blobmsg_add_u32(&b, "mode", 1);
+	blobmsg_add_u32(&b, "duration", 50);
+	blobmsg_add_u32(&b, "channel", channel);
+	blobmsg_add_u32(&b, "op_class", op_class);
+	roam_bss_invoke(from, "rrm_beacon_req", &b);
+}
+
 static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to,
 				  unsigned int *budget)
 {
 	if (!sta->rrm || !config.neighbor_reports || !to->op_class)
 		return;
 
-	if (sta->beacon_req_silent >= config.steer_retries)
+	if (beacon_req_silenced(sta))
 		return;
 
-	if (roam_now - sta->last_beacon_req < config.beacon_req_interval)
+	if (roam_now - sta->last_beacon_req < config.beacon_req_interval ||
+	    roam_now - sta->last_mesh_req < BEACON_REQ_GAP)
 		return;
 
 	if (!*budget)
@@ -122,16 +158,39 @@ static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, s
 	(*budget)--;
 
 	sta->last_beacon_req = roam_now;
-	sta->beacon_req_silent++;
+	beacon_req_send(sta, from, to->ssid, to->op_class, to->channel);
+}
 
-	blob_buf_init(&b, 0);
-	blobmsg_add_string(&b, "addr", sta->mac);
-	blobmsg_add_string(&b, "ssid", to->ssid);
-	blobmsg_add_u32(&b, "mode", 1);
-	blobmsg_add_u32(&b, "duration", 50);
-	blobmsg_add_u32(&b, "channel", to->channel);
-	blobmsg_add_u32(&b, "op_class", to->op_class);
-	roam_bss_invoke(from, "rrm_beacon_req", &b);
+static void policy_mesh_measure(struct roam_sta *sta, struct roam_bss *bss, unsigned int *budget)
+{
+	struct mesh_channel ch[MESH_MEASURE_CHANNELS] = {
+		{ .op_class = bss->op_class, .channel = bss->channel }
+	};
+	int here = sta->band[bss->band].signal;
+	unsigned int n;
+
+	if (!sta->rrm || !config.neighbor_reports || !bss->op_class || !*budget)
+		return;
+
+	if (here == ROAMD_NO_SIGNAL || here >= config.rssi_good)
+		return;
+
+	if (roam_now - sta->last_mesh_req < MESH_MEASURE_INTERVAL ||
+	    roam_now - sta->last_beacon_req < BEACON_REQ_GAP)
+		return;
+
+	if (beacon_req_silenced(sta))
+		return;
+
+	n = mesh_neighbor_channels(bss->ssid, bss->band, ch, 1, ARRAY_SIZE(ch));
+	if (n < 2)
+		return;
+
+	(*budget)--;
+
+	sta->last_mesh_req = roam_now;
+	n = sta->mesh_req_idx++ % n;
+	beacon_req_send(sta, bss, bss->ssid, ch[n].op_class, ch[n].channel);
 }
 
 static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to)
@@ -208,10 +267,14 @@ void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from)
 	sta_del_client(sta, from);
 }
 
-bool roam_policy_can_steer(const struct roam_sta *sta)
+bool roam_policy_can_steer(struct roam_sta *sta)
 {
-	if (sta->steer_count >= config.steer_retries)
-		return false;
+	if (sta->steer_count >= config.steer_retries) {
+		if (roam_now - sta->last_steer < RETRY_RESET_TIME)
+			return false;
+
+		sta->steer_count = 0;
+	}
 
 	return !sta->last_steer || roam_now - sta->last_steer >= STEER_RETRY_INTERVAL;
 }
@@ -268,6 +331,8 @@ void roam_policy_run(struct roam_bss *bss)
 		verdict = roam_admit(sta->addr, mesh_self_node_id(), bss->band);
 		if (verdict != ADMIT_OK)
 			policy_evict(sta, bss, verdict);
+		else
+			policy_mesh_measure(sta, bss, &beacon_budget);
 	}
 
 	if (!config.bss_transition || !config.band_steering || config.prefer == PREFER_NONE)

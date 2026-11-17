@@ -702,6 +702,26 @@ static int roamd_mesh_client_forget(struct ubus_context *ctx, struct ubus_object
 	return 0;
 }
 
+static int roamd_mesh_client_host(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	struct blob_attr *tb[__MESH_ARG_MAX];
+
+	if (mesh.role != MESH_CONTROLLER)
+		return UBUS_STATUS_PERMISSION_DENIED;
+
+	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
+	if (!tb[MESH_ARG_MAC] || !tb[MESH_ARG_NAME])
+		return UBUS_STATUS_INVALID_ARGUMENT;
+
+	if (!mesh_client_host(blobmsg_get_string(tb[MESH_ARG_MAC]),
+			      blobmsg_get_string(tb[MESH_ARG_NAME])))
+		return UBUS_STATUS_NOT_FOUND;
+
+	return 0;
+}
+
 static int roamd_mesh_neighbors(struct ubus_context *ctx, struct ubus_object *obj,
 			struct ubus_request_data *req, const char *method,
 			struct blob_attr *msg)
@@ -773,6 +793,7 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD("mesh_member_update", roamd_mesh_member_update, mesh_arg_policy),
 	UBUS_METHOD("mesh_client_update", roamd_mesh_client_update, mesh_arg_policy),
 	UBUS_METHOD("mesh_client_forget", roamd_mesh_client_forget, mesh_arg_policy),
+	UBUS_METHOD("mesh_client_host", roamd_mesh_client_host, mesh_arg_policy),
 	UBUS_METHOD("mesh_self_check", roamd_mesh_job, mesh_arg_policy),
 	UBUS_METHOD("mesh_update", roamd_mesh_update, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_self_update", roamd_mesh_self_update),

@@ -3,7 +3,7 @@
 
 REPO="Ground-Zerro/roamd"
 RAW="https://raw.githubusercontent.com/$REPO/main"
-FEED_BASE="https://github.com/$REPO/releases/download"
+FEED_BASE="https://ground-zerro.github.io/roamd"
 FEED_NAME="roamd"
 PACKAGES="roamd luci-app-roamd"
 PACKAGES_RU="luci-i18n-roamd-ru"

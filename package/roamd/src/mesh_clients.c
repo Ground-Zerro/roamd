@@ -410,9 +410,10 @@ static void refresh_leases(void)
 
 		strncpy(c->ip, ip, sizeof(c->ip) - 1);
 		c->ip[sizeof(c->ip) - 1] = '\0';
-		c->host[0] = '\0';
-		if (strcmp(host, "*"))
-			strncpy(c->host, host, sizeof(c->host) - 1);
+		if (strcmp(host, "*") && strcmp(host, c->host)) {
+			snprintf(c->host, sizeof(c->host), "%s", host);
+			clients_dirty = true;
+		}
 	}
 
 	fclose(f);
@@ -499,6 +500,35 @@ unsigned int mesh_clients_local(void)
 	return n;
 }
 
+static bool host_valid(const char *name)
+{
+	size_t len = strlen(name);
+
+	return len && len < MESH_NAME_MAX &&
+	       strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") == len;
+}
+
+bool mesh_client_host(const char *mac, const char *name)
+{
+	struct ether_addr *ea = mac ? ether_aton(mac) : NULL;
+	struct client_rec *c;
+
+	if (!ea || !name || !host_valid(name))
+		return false;
+
+	c = client_find(ea->ether_addr_octet);
+	if (!c)
+		return false;
+
+	if (strcmp(c->host, name)) {
+		snprintf(c->host, sizeof(c->host), "%s", name);
+		clients_dirty = true;
+		mesh_clients_save();
+	}
+
+	return true;
+}
+
 bool mesh_client_forget(const char *mac)
 {
 	struct ether_addr *ea;
@@ -543,9 +573,10 @@ void mesh_clients_save(void)
 		if (!clients[i].used)
 			continue;
 
-		fprintf(f, "{\"mac\":\"%s\",\"node\":\"%s\",\"last_seen\":%u,\"wired\":%u}\n",
+		fprintf(f, "{\"mac\":\"%s\",\"node\":\"%s\",\"last_seen\":%u,\"wired\":%u,"
+			"\"host\":\"%s\"}\n",
 			clients[i].mac, clients[i].node, clients[i].last_seen,
-			clients[i].wired ? 1 : 0);
+			clients[i].wired ? 1 : 0, host_valid(clients[i].host) ? clients[i].host : "");
 	}
 
 	fclose(f);
@@ -561,13 +592,13 @@ void mesh_clients_load(void)
 		return;
 
 	while (fgets(line, sizeof(line), f)) {
-		char mac[18] = "", node[MESH_ID_MAX] = "";
+		char mac[18] = "", node[MESH_ID_MAX] = "", host[MESH_NAME_MAX] = "";
 		unsigned int seen = 0, wired = 0;
 		struct ether_addr ea;
 		struct client_rec *c;
 
-		if (sscanf(line, "{\"mac\":\"%17[^\"]\",\"node\":\"%32[^\"]\",\"last_seen\":%u,\"wired\":%u}",
-			   mac, node, &seen, &wired) < 2)
+		if (sscanf(line, "{\"mac\":\"%17[^\"]\",\"node\":\"%32[^\"]\",\"last_seen\":%u,\"wired\":%u,"
+			   "\"host\":\"%63[^\"]\"}", mac, node, &seen, &wired, host) < 2)
 			continue;
 
 		if (!ether_aton_r(mac, &ea))
@@ -581,6 +612,8 @@ void mesh_clients_load(void)
 		c->last_seen = seen;
 		c->wired = wired != 0;
 		c->state = CLIENT_UNKNOWN;
+		if (host_valid(host))
+			snprintf(c->host, sizeof(c->host), "%s", host);
 	}
 
 	fclose(f);

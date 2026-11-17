@@ -145,6 +145,12 @@ int main(int argc, char **argv)
 		return rc;
 	}
 
+	if (argc > 1) {
+		fprintf(stderr, "roamd: unknown command '%s'\n", argv[1]);
+		closelog();
+		return 1;
+	}
+
 	roam_config_load();
 
 	if (!config.enabled) {

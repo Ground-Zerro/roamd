@@ -2033,6 +2033,29 @@ static void node_identity_blob(struct blob_buf *b)
 	blobmsg_add_string(b, "ui_version", value);
 }
 
+static void node_measured_blob(struct blob_buf *b, const struct roam_sta *sta)
+{
+	unsigned int i;
+	void *arr;
+
+	arr = blobmsg_open_array(b, "measured");
+	for (i = 0; i < ROAMD_MEAS_MAX; i++) {
+		const struct roam_meas *m = &sta->meas[i];
+		char bssid[18];
+		void *t;
+
+		if (!m->seen || roam_now - m->seen > config.age_time)
+			continue;
+
+		roam_mac_str(m->bssid, bssid, sizeof(bssid));
+		t = blobmsg_open_table(b, NULL);
+		blobmsg_add_string(b, "bssid", bssid);
+		blobmsg_add_u32(b, "signal", (uint32_t)m->signal);
+		blobmsg_close_table(b, t);
+	}
+	blobmsg_close_array(b, arr);
+}
+
 void mesh_node_diag(struct blob_buf *b)
 {
 	node_identity_blob(b);
@@ -2224,6 +2247,8 @@ void mesh_node_report(struct blob_buf *b)
 					blobmsg_add_u32(b, band == BAND_LOW ?
 							"signal_24_age" : "signal_5_age", age);
 				}
+
+				node_measured_blob(b, sta);
 			}
 		}
 		mesh_assoc_blob(b, a);

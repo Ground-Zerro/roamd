@@ -2,6 +2,7 @@ build/
 dist/
 research/
 service_docs/
+.claude/
 package/luci-app-roamd/test/
 tests/
 rebuild.sh

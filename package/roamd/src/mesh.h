@@ -22,7 +22,7 @@
 #define MESH_BH_ALLOW_LEN	(MESH_ALLOW_MAX * (MESH_ID_MAX + 1))
 #define MESH_BH_LIMITS_LEN	768
 #define MESH_IFACE_MAX		16
-#define MESH_PKG_URL_DEFAULT	"https://github.com/Ground-Zerro/roamd/releases/download/feed-%b-%a"
+#define MESH_PKG_URL_DEFAULT	"https://ground-zerro.github.io/roamd/feed-%b-%a"
 
 enum mesh_role {
 	MESH_CONTROLLER,
@@ -380,6 +380,7 @@ void mesh_clients_dump(struct blob_buf *b);
 unsigned int mesh_clients_count(void);
 unsigned int mesh_clients_local(void);
 bool mesh_client_forget(const char *mac);
+bool mesh_client_host(const char *mac, const char *name);
 void mesh_clients_load(void);
 void mesh_clients_save(void);
 bool mesh_client_set(const char *mac, const char *band, const char *alias, const char *nodes);
@@ -388,6 +389,15 @@ bool mesh_client_set(const char *mac, const char *band, const char *alias, const
 
 void mesh_neighbors_set(struct blob_attr *arr);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
+bool mesh_neighbor_known(const uint8_t *bssid);
+
+struct mesh_channel {
+	uint8_t op_class;
+	uint8_t channel;
+};
+
+unsigned int mesh_neighbor_channels(const char *ssid, enum roam_band band,
+				    struct mesh_channel *list, unsigned int n, unsigned int max);
 
 enum mesh_job_kind {
 	MESH_JOB_DISCOVER,

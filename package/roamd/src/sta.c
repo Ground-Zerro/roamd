@@ -120,25 +120,28 @@ void roam_sta_event(struct roam_bss *bss, const uint8_t *addr, int signal)
 void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int signal)
 {
 	if (sta->bss != bss) {
-		struct roam_bss *prev = sta->bss;
+		bool moved = sta->bss || (sta->left_at && roam_now - sta->left_at < config.age_time &&
+					  sta->left_band != bss->band);
+		uint8_t from = sta->bss ? sta->bss->band : sta->left_band;
 
-		if (prev)
-			mesh_log_local(sta->mac, prev->band, bss->band, NULL, MESH_EV_ROAM);
+		if (moved)
+			mesh_log_local(sta->mac, from, bss->band, NULL, MESH_EV_ROAM);
 		else
 			mesh_log_local(sta->mac, MESH_BAND_NA, bss->band, NULL, MESH_EV_CONNECT);
 
-		if (prev && prev->band != bss->band) {
-			if (sta->last_steer && bss->band == sta->steer_from &&
-			    roam_now - sta->last_steer < config.age_time) {
-				if (++sta->flap_count >= STA_FLAP_LIMIT) {
-					sta->give_up_until = roam_now + STA_FLAP_PAUSE;
-					roam_log(ROAM_L_INFO,
-						 "roamd: %s keeps returning to %s GHz, leaving it alone",
-						 sta->mac, roam_band_name(bss->band));
-				}
-			} else {
+		if (moved && from != bss->band) {
+			bool steered = sta->last_steer &&
+				       roam_now - sta->last_steer < config.age_time;
+
+			if (!steered) {
 				sta->flap_count = 0;
 				sta->give_up_until = 0;
+			} else if (bss->band == sta->steer_from &&
+				   ++sta->flap_count >= STA_FLAP_LIMIT) {
+				sta->give_up_until = roam_now + STA_FLAP_PAUSE;
+				roam_log(ROAM_L_INFO,
+					 "roamd: %s keeps returning to %s GHz, leaving it alone",
+					 sta->mac, roam_band_name(bss->band));
 			}
 		}
 
@@ -149,6 +152,26 @@ void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int sign
 	}
 
 	sta_band_seen(sta, bss->band, signal);
+}
+
+void roam_sta_measured(struct roam_sta *sta, const uint8_t *bssid, int signal)
+{
+	struct roam_meas *m = &sta->meas[0];
+	unsigned int i;
+
+	for (i = 0; i < ROAMD_MEAS_MAX; i++) {
+		if (!memcmp(sta->meas[i].bssid, bssid, 6)) {
+			m = &sta->meas[i];
+			break;
+		}
+
+		if (sta->meas[i].seen < m->seen)
+			m = &sta->meas[i];
+	}
+
+	memcpy(m->bssid, bssid, 6);
+	m->signal = signal;
+	m->seen = roam_now;
 }
 
 int roam_sta_signal_seen(const struct roam_sta *sta, enum roam_band band, uint32_t *age)
@@ -175,6 +198,11 @@ int roam_sta_signal(const struct roam_sta *sta, enum roam_band band)
 
 void roam_sta_reset(struct roam_sta *sta)
 {
+	if (sta->bss) {
+		sta->left_band = sta->bss->band;
+		sta->left_at = roam_now;
+	}
+
 	sta->bss = NULL;
 	sta->connected_since = 0;
 }

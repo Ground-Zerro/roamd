@@ -17,6 +17,7 @@ usage() {
   $0 stop                           остановить раздачу
   $0 index-feed <ветка> <арх> <ключи>  индекс одной пары с подписью (для CI)
   $0 publish <каталог> <версия>     выложить релизы на GitHub (для CI)
+  $0 site <каталог>                 собрать все релизы feed-* в сайт для GitHub Pages (для CI)
 
 Переменные окружения:
   PORT   порт раздачи (сейчас $PORT)
@@ -189,6 +190,24 @@ publish_feeds() {
 	echo "  $tag ($(ls "$all" | wc -l) файлов)"
 }
 
+collect_site() {
+	out="$1"
+
+	command -v gh >/dev/null 2>&1 || { echo "нужен gh" >&2; return 1; }
+
+	tags=$(gh release list --limit 1000 --json tagName \
+		--jq '.[].tagName | select(startswith("feed-"))') || return 1
+	[ -n "$tags" ] || { echo "нет релизов feed-*" >&2; return 1; }
+
+	rm -rf "$out"
+	mkdir -p "$out"
+
+	for tag in $tags; do
+		gh release download "$tag" -D "$out/$tag" || return 1
+		echo "  $tag"
+	done
+}
+
 stop_serving() {
 	[ -f "$PIDFILE" ] || { echo "раздача не запущена"; return 0; }
 	kill "$(cat "$PIDFILE")" 2>/dev/null
@@ -201,6 +220,7 @@ case "${1-}" in
 index) build_index; exit 0 ;;
 index-feed) shift; index_feed "$1" "$2" "${3:-/tmp/keys}"; exit $? ;;
 publish) shift; publish_feeds "$1" "${2:-}"; exit $? ;;
+site) shift; collect_site "$1"; exit $? ;;
 stop) stop_serving; exit 0 ;;
 esac
 
