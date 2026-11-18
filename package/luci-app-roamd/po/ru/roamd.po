@@ -1005,9 +1005,6 @@ msgstr "OpenWrt %s (%s) не поддерживается: в репозитор
 msgid "Could not check for the roamd package for OpenWrt %s (%s): the package repository is unreachable. Check the internet access of the controller and search again"
 msgstr "Не удалось проверить наличие пакета roamd для OpenWrt %s (%s): репозиторий пакетов недоступен. Проверьте доступ контроллера в интернет и повторите поиск"
 
-msgid "curl could not be installed: without it the controller has no access to the package repository and no control channel to the node"
-msgstr "не удалось установить curl: без него контроллеру недоступны репозиторий пакетов и канал управления узлом"
-
 msgid "Update the controller"
 msgstr "Обновить контроллер"
 
@@ -1107,8 +1104,8 @@ msgstr "устройство сброшено и снова на связи"
 msgid "the node is unreachable"
 msgstr "узел недоступен"
 
-msgid "unknown OpenWrt version"
-msgstr "неизвестная версия OpenWrt"
+msgid "unknown OpenWrt version or architecture"
+msgstr "неизвестная версия OpenWrt или архитектура"
 
 msgid "no package for the OpenWrt version of the node"
 msgstr "нет пакета для версии OpenWrt узла"

@@ -582,8 +582,9 @@ void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int
 
 struct assoc_ctx {
 	struct mesh_assoc_idx *idx;
-	uint8_t band;
+	struct roam_bss *bss;
 	const char *enc;
+	bool mixed;
 };
 
 static void assoc_bytes(struct blob_attr *t, uint64_t *out)
@@ -634,6 +635,26 @@ static void assoc_phy(struct blob_attr *rate, struct mesh_assoc *a)
 	strncpy(a->std, std, sizeof(a->std) - 1);
 }
 
+static const char *assoc_security(const struct assoc_ctx *ctx, const uint8_t *addr)
+{
+	struct roam_sta *sta;
+
+	if (!ctx->mixed)
+		return ctx->enc;
+
+	sta = roam_sta_get(addr, false);
+	if (!sta || sta->bss != ctx->bss)
+		return ctx->enc;
+
+	if (sta->security_since != sta->connected_since) {
+		sta->security_since = sta->connected_since;
+		sta->security = NULL;
+		roam_bss_sta_security_query(ctx->bss, addr, sta->connected_since);
+	}
+
+	return sta->security ? sta->security : ctx->enc;
+}
+
 static void assoc_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 {
 	static const struct blobmsg_policy lp = { "results", BLOBMSG_TYPE_ARRAY };
@@ -656,6 +677,7 @@ static void assoc_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 		struct blob_attr *tb[__A_MAX];
 		struct ether_addr *ea;
 		struct mesh_assoc *a;
+		const char *enc;
 
 		if (ctx->idx->n >= MESH_ASSOC_MAX)
 			break;
@@ -671,11 +693,12 @@ static void assoc_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 		a = &ctx->idx->e[ctx->idx->n++];
 		memset(a, 0, sizeof(*a));
 		memcpy(a->addr, ea->ether_addr_octet, 6);
-		a->band = ctx->band;
+		a->band = ctx->bss->band;
 		if (tb[A_CONNECTED])
 			a->connected = blobmsg_get_u32(tb[A_CONNECTED]);
-		if (ctx->enc)
-			strncpy(a->enc, ctx->enc, sizeof(a->enc) - 1);
+		enc = assoc_security(ctx, a->addr);
+		if (enc)
+			strncpy(a->enc, enc, sizeof(a->enc) - 1);
 		if (tb[A_TX])
 			assoc_phy(tb[A_TX], a);
 		assoc_bytes(tb[A_RX], &a->rx_bytes);
@@ -690,9 +713,12 @@ static void info_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 		{ "wpa", BLOBMSG_TYPE_ARRAY },
 		{ "enabled", BLOBMSG_TYPE_INT8 },
 	};
+	static const char *const names[] = { NULL, "WPA", "WPA2", "WPA3" };
 	struct blob_attr *enc = NULL, *tb[2], *cur;
 	char *out = req->priv;
-	int rem, max = 0;
+	size_t used = 0;
+	unsigned int mask = 0, v;
+	int rem;
 
 	blobmsg_parse(&ep, 1, &enc, blob_data(msg), blob_len(msg));
 	if (!enc)
@@ -704,19 +730,21 @@ static void info_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 
 	if (tb[0])
 		blobmsg_for_each_attr(cur, tb[0], rem) {
-			int v = 0;
-
 			switch (blobmsg_type(cur)) {
 			case BLOBMSG_TYPE_INT32: v = blobmsg_get_u32(cur); break;
 			case BLOBMSG_TYPE_INT16: v = blobmsg_get_u16(cur); break;
 			case BLOBMSG_TYPE_INT8: v = blobmsg_get_u8(cur); break;
+			default: v = 0;
 			}
 
-			if (v > max)
-				max = v;
+			if (v && v < ARRAY_SIZE(names))
+				mask |= 1u << v;
 		}
 
-	strcpy(out, max >= 3 ? "WPA3" : max == 2 ? "WPA2" : max == 1 ? "WPA" : "");
+	for (v = 1; v < ARRAY_SIZE(names); v++)
+		if (mask & (1u << v))
+			used += snprintf(out + used, MESH_WPA_MAX - used, "%s%s",
+					 used ? "/" : "", names[v]);
 }
 
 bool mesh_parent_mac(uint8_t *out)
@@ -765,8 +793,8 @@ void mesh_assoc_collect(struct mesh_assoc_idx *idx)
 		return;
 
 	list_for_each_entry(bss, &roam_bss_list, list) {
-		struct assoc_ctx ctx = { .idx = idx, .band = bss->band, .enc = NULL };
-		char enc[16] = "";
+		struct assoc_ctx ctx = { .idx = idx, .bss = bss };
+		char enc[MESH_WPA_MAX] = "";
 
 		if (!bss->active)
 			continue;
@@ -779,6 +807,7 @@ void mesh_assoc_collect(struct mesh_assoc_idx *idx)
 
 		ubus_invoke(ubus_ctx, iwinfo_id, "info", ab.head, info_cb, enc, MESH_UBUS_TIMEOUT);
 		ctx.enc = enc[0] ? enc : NULL;
+		ctx.mixed = strchr(enc, '/') != NULL;
 		ubus_invoke(ubus_ctx, iwinfo_id, "assoclist", ab.head, assoc_cb, &ctx, MESH_UBUS_TIMEOUT);
 	}
 }

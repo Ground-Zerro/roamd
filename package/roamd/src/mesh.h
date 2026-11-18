@@ -82,6 +82,7 @@ struct mesh_event {
 #define MESH_NET_ID_LEN		5
 #define MESH_NET_SUM_LEN	9
 #define MESH_ENC_MAX		24
+#define MESH_WPA_MAX		16
 #define MESH_BAND_24		0x1
 #define MESH_BAND_5		0x2
 
@@ -231,6 +232,7 @@ void mesh_node_forget(const char *addr);
 #define MESH_NODE_UNREACHABLE	5
 #define MESH_NODE_INSTALL_FAILED 1
 
+bool mesh_os_branch(const char *release, char *out, size_t len);
 bool mesh_release_parse(char *data, char *branch, size_t bl, char *arch, size_t al);
 bool mesh_node_release(const char *addr, bool pass, char *branch, size_t bl,
 		       char *arch, size_t al);
@@ -312,7 +314,7 @@ struct mesh_assoc {
 	uint64_t rx_bytes;
 	uint64_t tx_bytes;
 	char std[8];
-	char enc[16];
+	char enc[MESH_WPA_MAX];
 	uint8_t band;
 	bool wired;
 };

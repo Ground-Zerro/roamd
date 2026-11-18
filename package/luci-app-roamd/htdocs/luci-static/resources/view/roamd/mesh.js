@@ -251,10 +251,9 @@ var ACQUIRE_MSG = [
 	[ /^waiting for the device to come back after the reset$/, function() { return _('waiting for the device to come back'); } ],
 	[ /^the device is reset to factory settings and back online$/, function() { return _('the device is reset and back online'); } ],
 	[ /^the reset is skipped by the user$/, function() { return _('the reset is skipped by the user'); } ],
-	[ /^unknown OpenWrt version$/, function() { return _('unknown OpenWrt version'); } ],
+	[ /^unknown OpenWrt version or architecture$/, function() { return _('unknown OpenWrt version or architecture'); } ],
 	[ /^no package for the OpenWrt version of the node$/, function() { return _('no package for the OpenWrt version of the node'); } ],
 	[ /^package installation failed on the node$/, function() { return _('the package could not be installed on the node'); } ],
-	[ /^curl cannot be installed — no control channel to the node$/, function() { return _('curl could not be installed: without it the controller has no access to the package repository and no control channel to the node'); } ],
 	[ /^package source is not trusted: .*$/, function() { return _('the package source is not trusted: the repository must be https and its certificate must be in /etc/roamd/pkg.crt'); } ],
 	[ /^installing roamd and interface for (.+)$/, function(m) { return _('packages for OpenWrt %s').format(m[1]); } ],
 	[ /^repository unreachable, installed from the controller cache$/, function() { return _('repository unreachable, installed from the cache'); } ],
@@ -262,8 +261,8 @@ var ACQUIRE_MSG = [
 	[ /^cannot ask the node which packages it needs$/, function() { return _('the node did not report which packages it needs'); } ],
 	[ /^(\S+) is part of the device firmware and conflicts with roamd — it cannot be captured$/, function(m) { return _('%s is built into the firmware of this device and conflicts with roamd: such a device cannot become a node').format(m[1]); } ],
 	[ /^the node needs (.+) but has no OpenWrt package feeds — capture stopped before the node was changed$/, function(m) { return _('the node needs %s, but it has no OpenWrt package repositories; capture stopped before any change to the node').format(m[1]); } ],
-	[ /^the node needs (.+) from (\S+), which the controller cannot reach — capture stopped before the node was changed$/, function(m) { return _('the node needs %s from %s, but the controller cannot reach it; capture stopped before any change to the node').format(m[1], m[2]); } ],
-	[ /^the node at (\S+) is still a router \((.+)\) — single subnet not applied$/, function(m) { return _('the node at %s is still a router (%s): the single subnet was not applied').format(m[1], m[2]); } ],
+	[ /^the node needs (.+) from (\S+), which the controller cannot reach — capture stopped$/, function(m) { return _('the node needs %s from %s, but the controller cannot reach it; capture stopped before any change to the node').format(m[1], m[2]); } ],
+	[ /^the node at (\S+) is still a router \((.+)\) — single subnet$/, function(m) { return _('the node at %s is still a router (%s): the single subnet was not applied').format(m[1], m[2]); } ],
 	[ /^assigning node role$/, function() { return _('assigning the node role'); } ],
 	[ /^switching the node to the controller subnet$/, function() { return _('switching to the controller subnet'); } ],
 	[ /^checking 802.11v support on the node$/, function() { return _('checking 802.11v support'); } ],
@@ -282,7 +281,7 @@ var ACQUIRE_MSG = [
 	[ /^installing packages on the controller$/, function() { return _('installing the packages'); } ],
 	[ /^package index is not available$/, function() { return _('the package index is not available'); } ],
 	[ /^package installation failed$/, function() { return _('the packages could not be installed'); } ],
-	[ /^wpad: (.+)$/, function(m) { return m[1]; } ]
+	[ /^deps: (.+)$/, function(m) { return m[1]; } ]
 ];
 
 function acquireMsgText(msg) {

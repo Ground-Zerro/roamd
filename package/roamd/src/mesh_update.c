@@ -124,21 +124,30 @@ bool mesh_sys_installed(const char *name, char *out, size_t len)
 	return found;
 }
 
+bool mesh_os_branch(const char *release, char *out, size_t len)
+{
+	unsigned int major, minor;
+
+	if (sscanf(release, "%u.%u", &major, &minor) != 2)
+		return false;
+
+	snprintf(out, len, "%u.%02u", major, minor);
+
+	return true;
+}
+
 bool mesh_release_parse(char *data, char *branch, size_t bl, char *arch, size_t al)
 {
 	char *line, *save = NULL;
 	bool have_branch = false, have_arch = false;
 
 	for (line = strtok_r(data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-		char value[MESH_ARCH_MAX * 2], *dot;
+		char value[MESH_ARCH_MAX * 2];
 
 		if (!strncmp(line, "DISTRIB_RELEASE=", 16)) {
 			snprintf(value, sizeof(value), "%s", line + 16);
 			mesh_unquote(value);
-			dot = strrchr(value, '.');
-			snprintf(branch, bl, "%.*s", dot ? (int)(dot - value) : (int)strlen(value),
-				 value);
-			have_branch = branch[0] != 0;
+			have_branch = mesh_os_branch(value, branch, bl);
 		} else if (!strncmp(line, "DISTRIB_ARCH=", 13)) {
 			snprintf(value, sizeof(value), "%s", line + 13);
 			mesh_unquote(value);

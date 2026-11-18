@@ -111,14 +111,9 @@ static bool board_parse(const char *json, struct probe_info *info)
 static const char *pkg_state(const char *os, const char *arch)
 {
 	char branch[MESH_WORD_MAX], path[256];
-	const char *dot;
 
-	if (!os[0] || !arch[0])
+	if (!arch[0] || !mesh_os_branch(os, branch, sizeof(branch)))
 		return "missing";
-
-	dot = strrchr(os, '.');
-	snprintf(branch, sizeof(branch), "%.*s",
-		 dot ? (int)(dot - os) : (int)strlen(os), os);
 
 	if (mesh_pkg_sync(branch, arch, MESH_PKG_MAIN))
 		return "ready";

@@ -1,6 +1,6 @@
 # Сборка и выпуск
 
-> Документация для версии **roamd 1.3.0-r1** (веб-интерфейс **luci-app-roamd 1.3.0-r1**).
+> Документация для версии **roamd 1.3.0-r2** (веб-интерфейс **luci-app-roamd 1.3.0-r2**).
 >
 > Проект передан [freenetic](https://github.com/unisequence/freenetic) — дальнейшее
 > развитие идёт в его рамках.
@@ -119,8 +119,8 @@ make package/roamd/compile package/luci-app-roamd/compile -j$(nproc)
 
 | Файл | Строка |
 |---|---|
-| `package/roamd/Makefile` | `PKG_VERSION:=1.3.0-r1` |
-| `package/luci-app-roamd/Makefile` | `PKG_VERSION:=1.3.0-r1`, `PKG_PO_VERSION:=$(PKG_VERSION)` |
+| `package/roamd/Makefile` | `PKG_VERSION:=1.3.0-r2` |
+| `package/luci-app-roamd/Makefile` | `PKG_VERSION:=1.3.0-r2`, `PKG_PO_VERSION:=$(PKG_VERSION)` |
 
 * Пакеты нумеруются независимо: изменился демон — поднимается версия `roamd`,
   изменился интерфейс — `luci-app-roamd`.
@@ -144,7 +144,7 @@ make package/roamd/compile package/luci-app-roamd/compile -j$(nproc)
 фиксированному адресу. Поэтому на каждую пару «ветка × архитектура» заведён **свой релиз с
 постоянным тегом** `feed-<ветка>-<архитектура>`. Эти релизы перезаписываются при каждом выпуске.
 Рядом создаётся версионный релиз `v<версия>` со всеми пакетами сразу; имена файлов начинаются с
-ветки и архитектуры (`25.12-x86_64-roamd-1.3.0-r1.apk`).
+ветки и архитектуры (`25.12-x86_64-roamd-1.3.0-r2.apk`).
 
 **Раздача — GitHub Pages.** После публикации релизов все `feed-*` собираются в один сайт, и его
 адрес — адрес репозитория:
@@ -194,7 +194,7 @@ openssl rsa -in roamd.pem -pubout -out keys/roamd-apk.rsa.pub
 
 `.github/workflows/release.yml` запускается по тегу `v*` или вручную (можно указать ветки через
 пробел). Версия выпуска берётся из тега, при ручном запуске — из строки `version` в самом
-workflow (`1.3.0-r1`); она должна совпадать с `PKG_VERSION`, иначе пакеты уйдут в чужой
+workflow (`1.3.0-r2`); она должна совпадать с `PKG_VERSION`, иначе пакеты уйдут в чужой
 версионный релиз.
 
 | Задача | Действие |

@@ -162,15 +162,6 @@ static bool pkg_cmd(const char *action, const char *name)
 	return mesh_run(argv, -1, NULL, 0, PKG_TIMEOUT) == 0;
 }
 
-static bool have_network(void)
-{
-	char *argv[4] = { "/bin/sh", "-c",
-			  "wget -q -s -T 4 http://downloads.openwrt.org/ >/dev/null 2>&1 || "
-			  "wget -q -s -T 4 http://openwrt.org/ >/dev/null 2>&1", NULL };
-
-	return mesh_run(argv, -1, NULL, 0, 20000) == 0;
-}
-
 static void wpad_reload(void)
 {
 	char *argv[4] = { "/bin/sh", "-c",
@@ -213,12 +204,6 @@ int mesh_deps_ensure(bool need_only)
 	}
 
 	want = full_variant(cur);
-
-	if (!have_network()) {
-		deps_state("no network yet, dependencies will be checked again later");
-
-		return 1;
-	}
 
 	if (!pkg_cmd(apk ? "apk update" : "opkg update", NULL)) {
 		snprintf(text, sizeof(text),

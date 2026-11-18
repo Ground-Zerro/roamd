@@ -340,13 +340,9 @@ static bool member_update_available(struct blob_attr *report)
 	const char *have_ui = attr_str(report, "ui_version");
 	struct mesh_pkg_meta meta;
 	char branch[MESH_WORD_MAX];
-	const char *dot;
 
-	if (!os || !arch || !have)
+	if (!os || !arch || !have || !mesh_os_branch(os, branch, sizeof(branch)))
 		return false;
-
-	dot = strrchr(os, '.');
-	snprintf(branch, sizeof(branch), "%.*s", dot ? (int)(dot - os) : (int)strlen(os), os);
 
 	if (mesh_pkg_stale(branch, arch, MESH_PKG_MAIN))
 		mesh_pkg_refresh(branch, arch, MESH_PKG_MAIN, NULL, NULL);

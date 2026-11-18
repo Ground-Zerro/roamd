@@ -158,6 +158,8 @@ struct roam_sta {
 	struct roam_bss *bss;
 
 	uint64_t connected_since;
+	uint64_t security_since;
+	const char *security;
 	uint64_t left_at;
 	uint8_t left_band;
 	uint64_t last_steer;
@@ -234,6 +236,7 @@ bool roam_bss_matches(const struct roam_bss *bss);
 void roam_bss_recheck(void);
 void roam_neighbors_resync(void);
 int roam_bss_invoke(struct roam_bss *bss, const char *method, struct blob_buf *buf);
+void roam_bss_sta_security_query(const struct roam_bss *bss, const uint8_t *addr, uint64_t since);
 
 void roam_sta_setup(void);
 struct roam_sta *roam_sta_get(const uint8_t *addr, bool create);
@@ -250,7 +253,7 @@ int roam_sta_signal_seen(const struct roam_sta *sta, enum roam_band band, uint32
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev);
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from);
 void roam_policy_run(struct roam_bss *bss);
-bool roam_policy_can_steer(struct roam_sta *sta);
+bool roam_policy_can_steer(const struct roam_sta *sta);
 
 void roam_ubus_object_init(void);
 void roam_ubus_call_local(const char *method, struct blob_attr *msg);

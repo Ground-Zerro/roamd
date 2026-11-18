@@ -19,7 +19,7 @@ struct client_rec {
 	char node[MESH_ID_MAX];
 	char band[4];
 	char std[8];
-	char enc[16];
+	char enc[MESH_WPA_MAX];
 	uint32_t rate;
 	uint32_t width;
 	uint32_t nss;
